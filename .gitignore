@@ -1,0 +1,21 @@
+# Entorno y caché de Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Modelos descargados (decenas de GB: NO subir a GitHub)
+models/
+
+# Archivos de sistema / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Imágenes de prueba y salidas
+*.png
+*.jpg
+*.jpeg
+*.webp
+!assets/*
