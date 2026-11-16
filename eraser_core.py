@@ -8,6 +8,11 @@ import numpy as np
 import torch
 from PIL import Image, ImageChops, ImageFilter
 
+try:  # opcional: relleno clásico para manchas pequeñas
+    import cv2
+except Exception:  # pragma: no cover
+    cv2 = None
+
 MODEL_ID = "Qwen/Qwen-Image-2.1"
 
 # Color del resaltado: magenta, porque casi no aparece en fotos reales (el rojo se confunde
@@ -51,6 +56,7 @@ class Settings:
     mode: str = "overlay"      # "overlay" (pintado en rojo) | "reference" (máscara como 2ª imagen)
     extra_prompt: str = ""
     action: str = "erase"      # "erase" (borrar objeto) | "fill" (rellenar/agregar según instrucción)
+    small_px: int = 64         # zonas más chicas que esto (lado mayor, en px) usan relleno clásico; 0 = nunca
 
 
 def _round32(v: int) -> int:
@@ -61,6 +67,37 @@ def _grow(mask: Image.Image, px: int) -> Image.Image:
     if px <= 0:
         return mask
     return mask.filter(ImageFilter.MaxFilter(2 * px + 1))
+
+
+def _magenta_fraction(img: Image.Image, mask: Image.Image) -> float:
+    """Fracción de píxeles dentro de la máscara que siguen siendo magenta (resaltado sobrante)."""
+    a = np.asarray(img.convert("RGB")).astype(np.int16)
+    m = np.asarray(mask.convert("L")) > 127
+    if not m.any():
+        return 0.0
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    mag = ((r - g) > 80) & ((b - g) > 80) & (np.abs(r - b) < 110)
+    return float((mag & m).sum() / m.sum())
+
+
+def _classical_inpaint(img: Image.Image, mask: Image.Image, radius: int = 5) -> Image.Image | None:
+    """Relleno clásico (Telea) con OpenCV. Útil para manchas pequeñas. None si no hay OpenCV."""
+    if cv2 is None:
+        return None
+    arr = np.ascontiguousarray(np.asarray(img.convert("RGB")))
+    m = ((np.asarray(mask.convert("L")) > 127).astype(np.uint8)) * 255
+    return Image.fromarray(cv2.inpaint(arr, m, radius, cv2.INPAINT_TELEA))
+
+
+def _paste_patch(image: Image.Image, patch: Image.Image, mcrop: Image.Image,
+                 box: tuple[int, int, int, int], feather_px: int) -> Image.Image:
+    """Pega `patch` solo dentro de la máscara (borde suavizado) sobre una copia de `image`."""
+    soft = mcrop
+    if feather_px > 0:
+        soft = _grow(mcrop, feather_px // 2).filter(ImageFilter.GaussianBlur(feather_px))
+    result = image.copy()
+    result.paste(patch, box[:2], mask=soft)
+    return result
 
 
 class Eraser:
@@ -144,39 +181,51 @@ class Eraser:
         W, H = size
         x0, y0, x1, y1 = mask.getbbox()
         bw, bh = x1 - x0, y1 - y0
-        margin = max(96, int(context * max(bw, bh)))
+        margin = max(128, int(context * max(bw, bh)))
         x0, y0, x1, y1 = x0 - margin, y0 - margin, x1 + margin, y1 + margin
-        # recorte mínimo de 512 px por lado (si la imagen lo permite)
+        # recorte mínimo de 640 px por lado (si la imagen lo permite)
         for _ in range(2):
-            if x1 - x0 < 512:
-                d = (512 - (x1 - x0)) // 2 + 1
+            if x1 - x0 < 640:
+                d = (640 - (x1 - x0)) // 2 + 1
                 x0, x1 = x0 - d, x1 + d
-            if y1 - y0 < 512:
-                d = (512 - (y1 - y0)) // 2 + 1
+            if y1 - y0 < 640:
+                d = (640 - (y1 - y0)) // 2 + 1
                 y0, y1 = y0 - d, y1 + d
         return max(0, x0), max(0, y0), min(W, x1), min(H, y1)
 
     # --------------------------------------------------------------- inferencia
     @torch.inference_mode()
     def erase(self, image: Image.Image, mask: Image.Image, s: Settings, progress=None) -> Image.Image:
-        self.load()
         image = image.convert("RGB")
-        mask_big = _grow(mask, s.grow_px)
+        fill = s.action == "fill"
+        what = s.extra_prompt.strip()
+        if fill and not what:
+            raise ValueError("En modo 'Rellenar' escribí en 'Instrucción' qué debe aparecer (en inglés).")
+
+        x0, y0, x1, y1 = mask.getbbox()
+        small = max(x1 - x0, y1 - y0) <= max(1, s.small_px) if s.small_px > 0 else False
+        # En zonas chicas conviene tapar un poco más alrededor.
+        grow = max(s.grow_px, 10) if max(x1 - x0, y1 - y0) < 150 else s.grow_px
+        mask_big = _grow(mask, grow)
 
         box = self._crop_box(mask_big, image.size, s.context)
         crop = image.crop(box)
         mcrop = mask_big.crop(box)
         cw, ch = crop.size
 
+        # Manchas pequeñas: el modelo suele fallar (deja el resaltado o dibuja garabatos).
+        # Se usa un relleno clásico, instantáneo y sin cargar el modelo.
+        if small and not fill and cv2 is not None:
+            patch = _classical_inpaint(crop, mcrop)
+            if patch is not None:
+                return _paste_patch(image, patch, mcrop, box, s.feather_px)
+
+        self.load()
+
         scale = min(2.0, s.max_side / max(cw, ch))
         tw, th = _round32(int(cw * scale)), _round32(int(ch * scale))
         crop_in = crop.resize((tw, th), Image.LANCZOS)
         mask_in = mcrop.resize((tw, th), Image.NEAREST)
-
-        fill = s.action == "fill"
-        what = s.extra_prompt.strip()
-        if fill and not what:
-            raise ValueError("En modo 'Rellenar' escribí en 'Instrucción' qué debe aparecer (en inglés).")
 
         if s.mode == "reference":
             images = [crop_in, mask_in.convert("RGB")]
@@ -189,32 +238,43 @@ class Eraser:
         if what and not fill:
             prompt += " " + what
 
-        def _cb(pipe, step, timestep, cb_kwargs):
-            if progress is not None:
-                progress((step + 1) / s.steps, desc=f"Paso {step + 1}/{s.steps}")
-            return cb_kwargs
+        attempts = 3 if s.mode == "overlay" else 1   # reintenta si queda magenta sin quitar
+        best = None
+        for attempt in range(attempts):
+            def _cb(pipe, step, timestep, cb_kwargs, _a=attempt):
+                if progress is not None:
+                    tag = f"Intento {_a + 1}/{attempts} · " if attempt else ""
+                    progress((step + 1) / s.steps, desc=f"{tag}Paso {step + 1}/{s.steps}")
+                return cb_kwargs
 
-        call_kwargs = dict(
-            prompt=prompt,
-            image=images,
-            width=tw,
-            height=th,
-            num_inference_steps=s.steps,
-            generator=torch.Generator("cpu").manual_seed(s.seed),
-        )
-        try:
-            out = self.pipe(**call_kwargs, callback_on_step_end=_cb).images[0]
-        except TypeError:  # versiones sin callback_on_step_end
-            out = self.pipe(**call_kwargs).images[0]
+            call_kwargs = dict(
+                prompt=prompt,
+                image=images,
+                width=tw,
+                height=th,
+                num_inference_steps=s.steps,
+                generator=torch.Generator("cpu").manual_seed(s.seed + attempt),
+            )
+            try:
+                out = self.pipe(**call_kwargs, callback_on_step_end=_cb).images[0]
+            except TypeError:  # versiones sin callback_on_step_end
+                out = self.pipe(**call_kwargs).images[0]
+            out = out.convert("RGB").resize((cw, ch), Image.LANCZOS)
 
-        out = out.convert("RGB").resize((cw, ch), Image.LANCZOS)
+            frac = _magenta_fraction(out, mcrop) if s.mode == "overlay" else 0.0
+            if best is None or frac < best[0]:
+                best = (frac, out)
+            if frac < 0.02:
+                break
 
-        # Solo se reemplaza la zona enmascarada: el resto de la foto queda intacto.
-        soft = mcrop
-        if s.feather_px > 0:
-            soft = _grow(mcrop, s.feather_px // 2).filter(ImageFilter.GaussianBlur(s.feather_px))
-        result = image.copy()
-        result.paste(out, box[:2], mask=soft)
+        frac, out = best
+        if frac >= 0.02 and not fill:
+            # El modelo dejó el resaltado: se usa el relleno clásico como último recurso.
+            patch = _classical_inpaint(crop, mcrop)
+            if patch is not None:
+                out = patch
+
+        result = _paste_patch(image, out, mcrop, box, s.feather_px)
 
         gc.collect()
         if torch.cuda.is_available():

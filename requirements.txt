@@ -1,9 +1,10 @@
-# PyTorch con CUDA se instala aparte (ver README), mismo comando en Linux y Windows.
+# torch y torchvision (con CUDA) se instalan aparte desde el índice de PyTorch (ver README).
 transformers>=5.17
 accelerate
 bitsandbytes>=0.45
 gradio>=5.0
 pillow
+opencv-python-headless
 numpy
 # Diffusers desde git (QwenImage21Pipeline es muy reciente):
 git+https://github.com/huggingface/diffusers

@@ -71,7 +71,7 @@ Opciones:
 | `--offload model` (por defecto) | Mueve componentes a la CPU cuando no se usan. |
 | `--offload sequential` | Más lento, pero usa menos VRAM. Útil si hay errores de memoria. |
 | `--model RUTA` | Usar una copia local del modelo. |
-| `--port`, `--host` | Puerto y dirección del servidor. |
+| `--port`, `--host` | Puerto y dirección del servidor. Sin `--port` se usa el primero libre desde 7860. |
 | `--share` | Link público temporal de Gradio. |
 | `--no-browser` | No abrir el navegador automáticamente. |
 
@@ -122,7 +122,10 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 |---|---|
 | `Qwen3VLVideoProcessor requires the Torchvision library` | Instalá torchvision desde el mismo índice de CUDA que torch (ver Instalación). |
 | `CUDA out of memory` | Usá `--offload sequential`, bajá la resolución del recorte y cerrá otros programas que usen la GPU. |
+| `broken PNG file` / "La imagen del editor llegó dañada" | Quitá la imagen con la ✕ del editor y volvé a cargarla. Al iniciar, la app limpia su carpeta temporal `.gradio_tmp/`; si persiste, cerrá y reabrí la app. |
+| `Cannot find empty port` | Hay otra instancia abierta (ciérrala) o el puerto está reservado por Windows. Con la versión actual se elige un puerto libre automáticamente. |
 | El editor queda en "Cargando..." | Refrescá con Ctrl+F5 y cerrá otras pestañas con la app abierta. |
+| Queda una mancha magenta o garabatos al borrar algo muy pequeño | Las zonas diminutas usan un relleno clásico (OpenCV, instalalo con `pip install opencv-python-headless`). Ajustá el umbral en Ajustes. Si el modelo deja magenta, la app reintenta con otra semilla y, si falla, usa ese relleno. |
 | Quedan restos del objeto | Pintá más superficie (con sombras) o subí "Agrandar máscara". |
 | El modelo reemplaza el objeto por otra cosa | Escribí en Instrucción qué debe quedar (ej. `fill with the wooden pier and the lake water`), probá otra semilla o el modo `reference`. |
 | Queda color magenta en el resultado | Subí "Agrandar máscara" y volvé a ejecutar. |
