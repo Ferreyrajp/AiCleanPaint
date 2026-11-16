@@ -20,6 +20,7 @@ Agregá capturas en la carpeta assets/ y descomentá:
 - **Solo cambia lo que pintás:** el resultado se pega únicamente dentro de la máscara, con borde suavizado. El resto de la imagen queda intacto.
 - **Edición por recorte:** solo se procesa la zona alrededor de la máscara, así se mantiene la resolución original y se ahorra memoria.
 - **Cuantización a 4 bits (NF4)** y offload a CPU para entrar en 12 GB de VRAM.
+- **Comparador antes / después:** pestaña con una línea que sigue al cursor y revela la imagen original a un lado y el resultado al otro.
 - Encadenado de ediciones con el botón "Usar resultado como nueva entrada".
 
 ## Requisitos

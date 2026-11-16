@@ -65,6 +65,7 @@ try:
 except Exception:  # si cambia la estructura interna de Gradio, la app sigue funcionando
     pass
 
+from compare_view import EMPTY_HTML, build_compare_html
 from eraser_core import MODEL_ID, Eraser, Settings
 
 parser = argparse.ArgumentParser()
@@ -149,7 +150,12 @@ def run(editor, action, extra, steps, max_side, context, grow_px, feather_px, se
         action="fill" if action.startswith("Rellenar") else "erase",
         small_px=int(small_px),
     )
-    return eraser.erase(image, mask, s, progress=progress)
+    result = eraser.erase(image, mask, s, progress=progress)
+    try:
+        compare = build_compare_html(image, result)
+    except Exception:  # el comparador es accesorio: nunca debe romper la edición
+        compare = EMPTY_HTML
+    return result, compare
 
 
 def reuse(result):
@@ -159,7 +165,7 @@ def reuse(result):
 
 
 with gr.Blocks(title="AiCleanPaint") as demo:
-    gr.Markdown("## AiCleanPaint\nSubí una imagen, **pintá encima del objeto** que querés borrar y presioná *Borrar*.")
+    gr.Markdown("## AiCleanPaint\nSubí una imagen, **pintá encima del objeto** que querés borrar, seleccioná **Borrar objeto** y presioná **Ejecutar**.")
     with gr.Row():
         with gr.Column():
             editor = gr.ImageEditor(
@@ -183,7 +189,11 @@ with gr.Blocks(title="AiCleanPaint") as demo:
             )
             btn = gr.Button("Ejecutar", variant="primary")
         with gr.Column():
-            out = gr.Image(label="Resultado", type="pil", height=600, format="png")
+            with gr.Tabs():
+                with gr.Tab("Resultado"):
+                    out = gr.Image(label="Resultado", type="pil", height=600, format="png")
+                with gr.Tab("Antes / después"):
+                    compare = gr.HTML(EMPTY_HTML)
             again = gr.Button("Usar resultado como nueva entrada")
 
     with gr.Accordion("Ajustes", open=False):
@@ -199,10 +209,10 @@ with gr.Blocks(title="AiCleanPaint") as demo:
         seed = gr.Number(value=load_seed(), precision=0, label="Semilla (cambiala si el resultado no convence)")
         mode = gr.Radio(["overlay", "reference"], value="overlay",
                         label="Cómo se le indica la zona al modelo",
-                        info="overlay: pintado en rojo sobre la imagen. reference: máscara como segunda imagen.")
+                        info="overlay: zona resaltada en magenta sobre la imagen. reference: máscara como segunda imagen.")
 
     inputs = [editor, action, extra, steps, max_side, context, grow_px, feather_px, seed, mode, small_px]
-    btn.click(run, inputs, out)
+    btn.click(run, inputs, [out, compare])
     seed.change(save_seed, seed, None, show_progress="hidden")
     demo.load(load_seed, None, seed)  # al abrir/refrescar la página, usa la última semilla guardada
     again.click(reuse, out, editor)
