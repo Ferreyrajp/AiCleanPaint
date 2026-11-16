@@ -5,6 +5,8 @@ bitsandbytes>=0.45
 gradio>=5.0
 pillow
 opencv-python-headless
+sentencepiece
+sacremoses
 numpy
 # Diffusers desde git (QwenImage21Pipeline es muy reciente):
 git+https://github.com/huggingface/diffusers

@@ -4,6 +4,9 @@ venv/
 __pycache__/
 *.pyc
 
+# Resultados generados
+outputs/
+
 # Preferencias locales del usuario
 settings.json
 

@@ -21,6 +21,8 @@ Agregá capturas en la carpeta assets/ y descomentá:
 - **Edición por recorte:** solo se procesa la zona alrededor de la máscara, así se mantiene la resolución original y se ahorra memoria.
 - **Cuantización a 4 bits (NF4)** y offload a CPU para entrar en 12 GB de VRAM.
 - **Comparador antes / después:** pestaña con una línea que sigue al cursor y revela la imagen original a un lado y el resultado al otro.
+- **Guardado automático:** cada resultado se guarda en `outputs/` como PNG sin pérdida, con fecha y hora en el nombre y los parámetros usados embebidos en el archivo.
+- **Historial con Deshacer / Rehacer:** volvé a cualquier versión anterior de una cadena de ediciones y seguí desde ahí (hasta 30 versiones por sesión).
 - Encadenado de ediciones con el botón "Usar resultado como nueva entrada".
 
 ## Requisitos
@@ -91,10 +93,17 @@ Opciones:
 
 1. Elegí **Rellenar con instrucción**.
 2. Pintá la zona donde debe aparecer lo nuevo e incluí algo de la zona vecina para dar continuidad.
-3. Describí en inglés qué debe aparecer, por ejemplo: `her left leg, standing naturally next to the other leg, same skin tone and lighting`.
+3. Describí qué debe aparecer, en español o inglés. Por ejemplo: `su otra pierna, parada de forma natural junto a la otra, mismo tono de piel e iluminación`. Si escribís en español se traduce automáticamente al inglés (podés revisar el resultado en "Instrucción enviada al modelo" o desactivar la traducción en Ajustes).
 4. Apretá **Ejecutar**. Si no convence, cambiá la semilla en Ajustes.
 
 Después de "Usar resultado como nueva entrada" hay que volver a pintar: el pincel se reinicia.
+
+### Historial y resultados guardados
+
+- Cada edición se guarda en `outputs/AAAA-MM-DD_HH-MM-SS_borrar.png` (o `_rellenar`). Los parámetros quedan dentro del PNG (campo `parameters`).
+- **↶ Deshacer / ↷ Rehacer** cargan la versión anterior o siguiente directamente en el editor. Si editás desde una versión anterior, las posteriores se descartan.
+- Si subís otra imagen, empieza un historial nuevo. El historial vale por sesión: al cerrar la app se pierde, pero los archivos de `outputs/` quedan.
+- La carpeta `outputs/` no se limpia sola. Podés desactivar el guardado en Ajustes.
 
 ## Ajustes
 
@@ -128,7 +137,7 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 | El editor queda en "Cargando..." | Refrescá con Ctrl+F5 y cerrá otras pestañas con la app abierta. |
 | Queda una mancha magenta o garabatos al borrar algo muy pequeño | Las zonas diminutas usan un relleno clásico (OpenCV, instalalo con `pip install opencv-python-headless`). Ajustá el umbral en Ajustes. Si el modelo deja magenta, la app reintenta con otra semilla y, si falla, usa ese relleno. |
 | Quedan restos del objeto | Pintá más superficie (con sombras) o subí "Agrandar máscara". |
-| El modelo reemplaza el objeto por otra cosa | Escribí en Instrucción qué debe quedar (ej. `fill with the wooden pier and the lake water`), probá otra semilla o el modo `reference`. |
+| El modelo reemplaza el objeto por otra cosa | Escribí en Instrucción qué debe quedar (ej. `rellená con el muelle de madera y el agua del lago`), probá otra semilla o el modo `reference`. |
 | Queda color magenta en el resultado | Subí "Agrandar máscara" y volvé a ejecutar. |
 | Aviso de Hugging Face sobre peticiones sin autenticar | Es opcional. Podés definir `HF_TOKEN` para descargas más rápidas. |
 | Todavía descarga en `C:` y no en `models/` | Revisá si tenés definida la variable de entorno `HF_HOME`: si existe, tiene prioridad. |
@@ -138,9 +147,13 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 ```
 app.py            Interfaz Gradio
 eraser_core.py    Carga del modelo, recorte, inferencia y pegado
+history.py        Guardado automático e historial deshacer/rehacer
+compare_view.py   Comparador antes/después
+translate.py      Traducción español → inglés de la instrucción
 requirements.txt  Dependencias (torch se instala aparte)
 run.bat / run.sh  Lanzadores para Windows y Linux
 models/           Pesos descargados (no se sube a Git)
+outputs/          Resultados guardados (no se sube a Git)
 ```
 
 ## Limitaciones

@@ -19,8 +19,11 @@ if "GRADIO_TEMP_DIR" not in os.environ:
     os.environ["GRADIO_TEMP_DIR"] = str(_tmp)
 
 import argparse
+import dataclasses
 import functools
 import json
+import subprocess
+import sys
 import time
 
 import gradio as gr
@@ -65,8 +68,10 @@ try:
 except Exception:  # si cambia la estructura interna de Gradio, la app sigue funcionando
     pass
 
+import history
 from compare_view import EMPTY_HTML, build_compare_html
 from eraser_core import MODEL_ID, Eraser, Settings
+from translate import prepare_instruction
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", default=MODEL_ID)
@@ -138,15 +143,18 @@ gr.ImageEditor.preprocess = _safe_preprocess
 
 
 def run(editor, action, extra, steps, max_side, context, grow_px, feather_px, seed, mode, small_px,
-        progress=gr.Progress()):
+        translate, autosave, hist, progress=gr.Progress()):
     image, mask = Eraser.mask_from_editor(editor)
     if eraser.pipe is None:
         progress(0, desc="Cargando modelo (la primera vez descarga varios GB)...")
         eraser.load()
+    instruction, translated, err = prepare_instruction(extra, enabled=translate)
+    if err:
+        gr.Warning("No se pudo traducir la instrucción; se envía tal cual. Detalle: " + err[:200])
     s = Settings(
         steps=int(steps), max_side=int(max_side), context=float(context),
         grow_px=int(grow_px), feather_px=int(feather_px), seed=int(seed),
-        mode=mode, extra_prompt=extra or "",
+        mode=mode, extra_prompt=instruction,
         action="fill" if action.startswith("Rellenar") else "erase",
         small_px=int(small_px),
     )
@@ -155,7 +163,16 @@ def run(editor, action, extra, steps, max_side, context, grow_px, feather_px, se
         compare = build_compare_html(image, result)
     except Exception:  # el comparador es accesorio: nunca debe romper la edición
         compare = EMPTY_HTML
-    return result, compare
+    # Historial + guardado automático (accesorios: un fallo acá no debe perder el resultado)
+    try:
+        meta = dataclasses.asdict(s)
+        meta.update({"app": "AiCleanPaint", "instruction_original": extra or "",
+                     "saved_at": time.strftime("%Y-%m-%d %H:%M:%S")})
+        hist, saved = history.push(hist, image, result, meta, autosave=bool(autosave))
+        info = history.status(hist, saved if autosave else None)
+    except Exception as e:
+        info = f"No se pudo guardar el historial ({type(e).__name__}: {e})"
+    return result, compare, instruction, hist, info
 
 
 def reuse(result):
@@ -164,7 +181,47 @@ def reuse(result):
     return {"background": result, "layers": [], "composite": None}
 
 
+def _navigate(hist, delta):
+    hist, img = history.step(hist, delta)
+    if img is None:
+        gr.Info("No hay más versiones en esa dirección.")
+        return gr.update(), gr.update(), gr.update(), hist, history.status(hist)
+    pair = history.pair_paths(hist)
+    compare = EMPTY_HTML
+    if pair is not None:
+        try:
+            from PIL import Image as _Image
+            with _Image.open(pair[0]) as b, _Image.open(pair[1]) as r:
+                compare = build_compare_html(b.convert("RGB"), r.convert("RGB"))
+        except Exception:
+            compare = EMPTY_HTML
+    editor_value = {"background": img, "layers": [], "composite": None}
+    return editor_value, img, compare, hist, history.status(hist)
+
+
+def undo(hist):
+    return _navigate(hist, -1)
+
+
+def redo(hist):
+    return _navigate(hist, +1)
+
+
+def open_outputs_folder():
+    history.OUTPUTS.mkdir(exist_ok=True)
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(history.OUTPUTS)  # type: ignore[attr-defined]
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(history.OUTPUTS)])
+        else:
+            subprocess.Popen(["xdg-open", str(history.OUTPUTS)])
+    except Exception as e:
+        gr.Warning(f"No se pudo abrir la carpeta: {e}. Está en: {history.OUTPUTS}")
+
+
 with gr.Blocks(title="AiCleanPaint") as demo:
+    hist = gr.State(history.new_state())
     gr.Markdown("## AiCleanPaint\nSubí una imagen, **pintá encima del objeto** que querés borrar, seleccioná **Borrar objeto** y presioná **Ejecutar**.")
     with gr.Row():
         with gr.Column():
@@ -184,8 +241,13 @@ with gr.Blocks(title="AiCleanPaint") as demo:
                 info="Rellenar sirve para agregar o corregir algo (ej. una pierna que falta).",
             )
             extra = gr.Textbox(
-                label="Instrucción (inglés). Obligatoria en 'Rellenar'; opcional al borrar",
-                placeholder="e.g. her second leg, standing naturally next to the other leg",
+                label="Instrucción (podés escribir en español). Obligatoria en 'Rellenar'; opcional al borrar",
+                placeholder="ej. su otra pierna, parada de forma natural junto a la otra",
+            )
+            sent = gr.Textbox(
+                label="Instrucción enviada al modelo",
+                interactive=False,
+                info="Si escribís en español se traduce al inglés; revisá que el sentido sea el correcto.",
             )
             btn = gr.Button("Ejecutar", variant="primary")
         with gr.Column():
@@ -195,6 +257,11 @@ with gr.Blocks(title="AiCleanPaint") as demo:
                 with gr.Tab("Antes / después"):
                     compare = gr.HTML(EMPTY_HTML)
             again = gr.Button("Usar resultado como nueva entrada")
+            with gr.Row():
+                undo_btn = gr.Button("↶ Deshacer")
+                redo_btn = gr.Button("↷ Rehacer")
+                open_btn = gr.Button("📂 Abrir carpeta de resultados")
+            status = gr.Markdown("Sin historial todavía.")
 
     with gr.Accordion("Ajustes", open=False):
         steps = gr.Slider(10, 50, value=30, step=1, label="Pasos (más = mejor y más lento)")
@@ -206,16 +273,27 @@ with gr.Blocks(title="AiCleanPaint") as demo:
         small_px = gr.Slider(0, 200, value=64, step=4,
                              label="Manchas pequeñas: usar relleno rápido si miden menos de (px, 0 = nunca)",
                              info="Para detalles diminutos el modelo falla; esto los resuelve sin usar la IA (requiere opencv).")
+        translate = gr.Checkbox(
+            value=True, label="Traducir la instrucción de español a inglés",
+            info="Desactivala para enviarla tal cual. La primera vez descarga un modelo chico (~300 MB).")
+        autosave = gr.Checkbox(
+            value=True, label="Guardar cada resultado en la carpeta outputs/",
+            info="PNG sin pérdida con fecha y hora. Si lo desactivás, el historial sigue funcionando pero no se guarda nada permanente.")
         seed = gr.Number(value=load_seed(), precision=0, label="Semilla (cambiala si el resultado no convence)")
         mode = gr.Radio(["overlay", "reference"], value="overlay",
                         label="Cómo se le indica la zona al modelo",
                         info="overlay: zona resaltada en magenta sobre la imagen. reference: máscara como segunda imagen.")
 
-    inputs = [editor, action, extra, steps, max_side, context, grow_px, feather_px, seed, mode, small_px]
-    btn.click(run, inputs, [out, compare])
+    inputs = [editor, action, extra, steps, max_side, context, grow_px, feather_px, seed, mode, small_px,
+              translate, autosave, hist]
+    btn.click(run, inputs, [out, compare, sent, hist, status])
     seed.change(save_seed, seed, None, show_progress="hidden")
     demo.load(load_seed, None, seed)  # al abrir/refrescar la página, usa la última semilla guardada
     again.click(reuse, out, editor)
+    nav_outputs = [editor, out, compare, hist, status]
+    undo_btn.click(undo, hist, nav_outputs)
+    redo_btn.click(redo, hist, nav_outputs)
+    open_btn.click(open_outputs_folder, None, None)
 
 if __name__ == "__main__":
     demo.queue().launch(server_name=args.host, server_port=args.port, share=args.share,
