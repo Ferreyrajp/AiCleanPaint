@@ -1,4 +1,8 @@
-# AiCleanPaint
+<p align="center">
+  <img src="assets/icon.png" alt="AiCleanPaint" width="140">
+</p>
+
+<h1 align="center">AiCleanPaint</h1>
 
 Borra objetos y personas de una imagen, y rellena o corrige zonas con IA generativa. Es una alternativa tipo [IOPaint](https://github.com/Sanster/IOPaint) basada en **Qwen-Image-2.1**, con interfaz web (Gradio) y pincel.
 

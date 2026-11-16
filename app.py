@@ -116,4 +116,5 @@ with gr.Blocks(title="AiCleanPaint") as demo:
 
 if __name__ == "__main__":
     demo.queue().launch(server_name=args.host, server_port=args.port, share=args.share,
-                        inbrowser=not args.no_browser)
+                        inbrowser=not args.no_browser,
+                        favicon_path=str(Path(__file__).resolve().parent / "assets" / "favicon.png"))
