@@ -20,6 +20,7 @@ Agregá capturas en la carpeta assets/ y descomentá:
 - **Solo cambia lo que pintás:** el resultado se pega únicamente dentro de la máscara, con borde suavizado. El resto de la imagen queda intacto.
 - **Edición por recorte:** solo se procesa la zona alrededor de la máscara, así se mantiene la resolución original y se ahorra memoria.
 - **Cuantización a 4 bits (NF4)** y offload a CPU para entrar en 12 GB de VRAM.
+- **Selección con un clic (opcional, apagada por defecto):** hacé clic sobre un objeto y SAM 2.1 genera la máscara; los clics siguientes la refinan. Ver más abajo.
 - **Comparador antes / después:** pestaña con una línea que sigue al cursor y revela la imagen original a un lado y el resultado al otro.
 - **Guardado automático:** cada resultado se guarda en `outputs/` como PNG sin pérdida, con fecha y hora en el nombre y los parámetros usados embebidos en el archivo.
 - **Historial con Deshacer / Rehacer:** volvé a cualquier versión anterior de una cadena de ediciones y seguí desde ahí (hasta 30 versiones por sesión).
@@ -76,6 +77,7 @@ Opciones:
 | `--model RUTA` | Usar una copia local del modelo. |
 | `--port`, `--host` | Puerto y dirección del servidor. Sin `--port` se usa el primero libre desde 7860. |
 | `--share` | Link público temporal de Gradio. |
+| `--sam-device cpu\|cuda` | Dispositivo para SAM (selección con clic). Por defecto `cpu`. |
 | `--no-browser` | No abrir el navegador automáticamente. |
 
 **Importante:** la primera vez que apretás el botón, se descargan los pesos (unos 33 GB) a la carpeta `models/` del proyecto y luego se cargan en memoria. Tarda bastante; las siguientes veces solo carga.
@@ -88,6 +90,17 @@ Opciones:
 2. Elegí la acción **Borrar objeto**.
 3. Pintá con el pincel **toda** la zona (incluyendo sombras y bordes) y un poco por fuera.
 4. Apretá **Ejecutar**.
+
+### Seleccionar con un clic (opcional)
+
+Está **apagada por defecto**: mientras no la actives, la app no descarga ni carga nada extra.
+
+1. En **Ajustes**, marcá *Habilitar selección con un clic (SAM 2.1)* y elegí el tamaño del modelo (`small`, unos 200 MB, es el recomendado). Aparece la sección *Selección con un clic*.
+2. Subí tu imagen al editor y apretá **1 · Cargar imagen del editor**. La primera vez descarga el modelo a `models/`.
+3. **Hacé clic sobre el objeto.** Con más clics de tipo *Incluir (+)* o *Excluir (−)* corregís la selección. Si no es la máscara que querías, probá *Máscara sugerida* 1, 2 o 3.
+4. Apretá **3 · Usar esta máscara**: pasa al editor como capa pintada. Retocala con el pincel si hace falta (SAM recorta el objeto, pero normalmente **no incluye su sombra proyectada**; pintala o subí «Agrandar máscara») y apretá **Ejecutar**.
+
+Tamaños aproximados de descarga: `tiny` ~155 MB, `small` ~200 MB, `base-plus` ~336 MB, `large` ~900 MB. SAM corre en la CPU por defecto para no competir por VRAM con Qwen (`--sam-device cuda` para usar la GPU). Requiere una versión de `transformers` que incluya SAM 2 (`pip install -U transformers`).
 
 ### Agregar o corregir algo
 
@@ -135,6 +148,9 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 | `broken PNG file` / "La imagen del editor llegó dañada" | Quitá la imagen con la ✕ del editor y volvé a cargarla. Al iniciar, la app limpia su carpeta temporal `.gradio_tmp/`; si persiste, cerrá y reabrí la app. |
 | `Cannot find empty port` | Hay otra instancia abierta (ciérrala) o el puerto está reservado por Windows. Con la versión actual se elige un puerto libre automáticamente. |
 | El editor queda en "Cargando..." | Refrescá con Ctrl+F5 y cerrá otras pestañas con la app abierta. |
+| `SAM 2` no se encuentra / `cannot import Sam2Model` | Actualizá transformers: `pip install -U transformers`. |
+| Los clics no marcan donde hice clic | Cargá de nuevo la imagen con «1 · Cargar imagen del editor» (si cambiaste el tamaño del modelo hay que volver a cargarla). |
+| La selección con clic es lenta | Usá `tiny`/`small`, o `--sam-device cuda` si te sobra VRAM. |
 | Queda una mancha magenta o garabatos al borrar algo muy pequeño | Las zonas diminutas usan un relleno clásico (OpenCV, instalalo con `pip install opencv-python-headless`). Ajustá el umbral en Ajustes. Si el modelo deja magenta, la app reintenta con otra semilla y, si falla, usa ese relleno. |
 | Quedan restos del objeto | Pintá más superficie (con sombras) o subí "Agrandar máscara". |
 | El modelo reemplaza el objeto por otra cosa | Escribí en Instrucción qué debe quedar (ej. `rellená con el muelle de madera y el agua del lago`), probá otra semilla o el modo `reference`. |
@@ -148,6 +164,9 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 app.py            Interfaz Gradio
 eraser_core.py    Carga del modelo, recorte, inferencia y pegado
 history.py        Guardado automático e historial deshacer/rehacer
+segmenter.py      Envoltorio de SAM 2.1 (selección con clic, opcional)
+click_select.py   Lógica de clics incluir/excluir y máscara final
+mask_tools.py     Vista previa, limpieza y conversión de máscaras
 compare_view.py   Comparador antes/después
 translate.py      Traducción español → inglés de la instrucción
 requirements.txt  Dependencias (torch se instala aparte)

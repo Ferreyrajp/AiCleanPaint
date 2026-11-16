@@ -68,9 +68,11 @@ try:
 except Exception:  # si cambia la estructura interna de Gradio, la app sigue funcionando
     pass
 
+import click_select
 import history
 from compare_view import EMPTY_HTML, build_compare_html
 from eraser_core import MODEL_ID, Eraser, Settings
+from segmenter import APPROX_MB, DEFAULT_SIZE, MODELS, Segmenter
 from translate import prepare_instruction
 
 parser = argparse.ArgumentParser()
@@ -82,34 +84,54 @@ parser.add_argument("--port", type=int, default=None,
                     help="puerto fijo; si se omite, usa el primero libre desde 7860")
 parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--share", action="store_true")
+parser.add_argument("--sam-device", choices=["cpu", "cuda"], default="cpu",
+                    help="dispositivo para SAM (selección con clic). cpu evita competir por VRAM con Qwen")
 parser.add_argument("--no-browser", action="store_true", help="no abrir el navegador automáticamente")
 args = parser.parse_args()
 
 eraser = Eraser(args.model, quant=args.quant, offload=args.offload)
 
-# --- Ajustes recordados entre sesiones (hoy: la semilla) -------------------------------
+# --- Ajustes recordados entre sesiones (semilla, selección con clic) -------------------
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 DEFAULT_SEED = 42
 
 
+def _read_settings() -> dict:
+    try:
+        return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def load_setting(key, default=None):
+    return _read_settings().get(key, default)
+
+
+def save_setting(key, value) -> None:
+    try:
+        data = _read_settings()
+        data[key] = value
+        SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # no es crítico: si no se puede guardar, la app sigue funcionando
+
+
 def load_seed() -> int:
     try:
-        return int(json.loads(SETTINGS_FILE.read_text(encoding="utf-8")).get("seed", DEFAULT_SEED))
+        return int(load_setting("seed", DEFAULT_SEED))
     except Exception:
         return DEFAULT_SEED
 
 
 def save_seed(value) -> None:
-    if value is None:
-        return
-    try:
-        data = {}
-        if SETTINGS_FILE.exists():
-            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        data["seed"] = int(value)
-        SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
-        pass  # no es crítico: si no se puede guardar, la app sigue funcionando
+    if value is not None:
+        save_setting("seed", int(value))
+
+
+# Selección con un clic (SAM 2.1): opcional y apagada por defecto. No se importa ni se descarga
+# nada hasta que se la habilita en Ajustes y se usa por primera vez.
+_saved_size = load_setting("sam_size", DEFAULT_SIZE)
+sam = Segmenter(size=_saved_size if _saved_size in MODELS else DEFAULT_SIZE, device=args.sam_device)
 
 
 # En algunas versiones de Gradio el navegador envía un `composite` corrupto y el preprocesado
@@ -220,6 +242,84 @@ def open_outputs_folder():
         gr.Warning(f"No se pudo abrir la carpeta: {e}. Está en: {history.OUTPUTS}")
 
 
+def _editor_background(editor):
+    if editor is None or editor.get("background") is None:
+        raise gr.Error("Primero subí una imagen en el editor.")
+    return editor["background"].convert("RGB")
+
+
+def sam_load(editor, state, size, progress=gr.Progress()):
+    image = _editor_background(editor)
+    progress(0, desc="Preparando SAM (la primera vez descarga el modelo)...")
+    try:
+        sam.set_size(size)
+        state = click_select.start(sam, image)
+    except Exception as e:
+        raise gr.Error(f"No se pudo preparar SAM: {e}")
+    return state["base"], state, click_select.describe(state)
+
+
+def sam_click(state, kind, cand, evt: gr.SelectData):
+    if state["base"] is None or not sam.ready:
+        gr.Warning("Primero apretá «1 · Cargar imagen del editor».")
+        return gr.update(), state, click_select.describe(state)
+    try:
+        x, y = evt.index[0], evt.index[1]
+        state, preview = click_select.add_point(state, sam, x, y, positive=kind.startswith("Incluir"),
+                                                choice=cand)
+    except ValueError as e:
+        gr.Warning(str(e))
+        return gr.update(), state, click_select.describe(state)
+    except Exception as e:
+        raise gr.Error(f"SAM falló: {e}")
+    return preview, state, click_select.describe(state)
+
+
+def sam_refresh(state, cand):
+    if state["base"] is None or not state["points"]:
+        return gr.update(), click_select.describe(state)
+    return click_select.render(state, cand), click_select.describe(state)
+
+
+def sam_undo(state, cand):
+    try:
+        state, preview = click_select.remove_last_point(state, sam, cand)
+    except Exception as e:
+        raise gr.Error(f"SAM falló: {e}")
+    return (preview if preview is not None else gr.update()), state, click_select.describe(state)
+
+
+def sam_clear(state, cand):
+    state, preview = click_select.clear(state, cand)
+    return (preview if preview is not None else gr.update()), state, click_select.describe(state)
+
+
+def sam_use(state, cand):
+    try:
+        value = click_select.to_editor_value(state, cand)
+    except ValueError as e:
+        gr.Warning(str(e))
+        return gr.update(), click_select.describe(state)
+    gr.Info("Máscara cargada en el editor. Revisala, retocala con el pincel si hace falta y apretá «Ejecutar».")
+    return value, "Máscara enviada al editor."
+
+
+def sam_toggle(enabled):
+    save_setting("sam_enabled", bool(enabled))
+    return gr.update(visible=bool(enabled))
+
+
+def sam_size_changed(size):
+    save_setting("sam_size", size)
+    sam.set_size(size)
+
+
+def sam_restore():
+    enabled = bool(load_setting("sam_enabled", False))
+    size = load_setting("sam_size", DEFAULT_SIZE)
+    return enabled, gr.update(visible=enabled), (size if size in MODELS else DEFAULT_SIZE)
+
+
 with gr.Blocks(title="AiCleanPaint") as demo:
     hist = gr.State(history.new_state())
     gr.Markdown("## AiCleanPaint\nSubí una imagen, **pintá encima del objeto** que querés borrar, seleccioná **Borrar objeto** y presioná **Ejecutar**.")
@@ -263,6 +363,25 @@ with gr.Blocks(title="AiCleanPaint") as demo:
                 open_btn = gr.Button("📂 Abrir carpeta de resultados")
             status = gr.Markdown("Sin historial todavía.")
 
+    with gr.Accordion("🖱️ Selección con un clic (SAM)", open=True,
+                      visible=bool(load_setting("sam_enabled", False))) as sam_box:
+        sam_state = gr.State(click_select.new_state())
+        gr.Markdown("**1)** Cargá la imagen del editor. **2)** Hacé clic sobre el objeto; más clics refinan la "
+                    "selección. **3)** «Usar esta máscara» la pasa al editor, donde podés retocarla con el pincel "
+                    "y apretar «Ejecutar».")
+        with gr.Row():
+            sam_load_btn = gr.Button("1 · Cargar imagen del editor")
+            sam_kind = gr.Radio(["Incluir (+)", "Excluir (−)"], value="Incluir (+)", label="Tipo de clic",
+                                info="Excluir quita de la selección lo que tocaste.")
+            sam_cand = gr.Radio(click_select.CAND_CHOICES, value="Auto", label="Máscara sugerida",
+                                info="Si no es la que querías, probá 1, 2 o 3.")
+        sam_img = gr.Image(label="Hacé clic sobre el objeto", type="pil", height=520)
+        with gr.Row():
+            sam_undo_btn = gr.Button("Quitar último clic")
+            sam_clear_btn = gr.Button("Limpiar clics")
+            sam_use_btn = gr.Button("3 · Usar esta máscara", variant="primary")
+        sam_msg = gr.Markdown(click_select.describe(click_select.new_state()))
+
     with gr.Accordion("Ajustes", open=False):
         steps = gr.Slider(10, 50, value=30, step=1, label="Pasos (más = mejor y más lento)")
         max_side = gr.Slider(512, 1536, value=1024, step=64,
@@ -279,6 +398,16 @@ with gr.Blocks(title="AiCleanPaint") as demo:
         autosave = gr.Checkbox(
             value=True, label="Guardar cada resultado en la carpeta outputs/",
             info="PNG sin pérdida con fecha y hora. Si lo desactivás, el historial sigue funcionando pero no se guarda nada permanente.")
+        sam_enable = gr.Checkbox(
+            value=bool(load_setting("sam_enabled", False)),
+            label="Habilitar selección con un clic (SAM 2.1)",
+            info="Apagado por defecto. Al usarlo por primera vez descarga el modelo elegido (ver tamaño abajo).")
+        _size0 = load_setting("sam_size", DEFAULT_SIZE)
+        sam_size = gr.Dropdown(
+            choices=[(f"{k} · ~{APPROX_MB[k]} MB" + (" (recomendado)" if k == DEFAULT_SIZE else ""), k)
+                     for k in MODELS],
+            value=_size0 if _size0 in MODELS else DEFAULT_SIZE, label="Tamaño del modelo SAM",
+            info="Más grande = bordes más finos pero más lento. Cambiarlo requiere volver a cargar la imagen.")
         seed = gr.Number(value=load_seed(), precision=0, label="Semilla (cambiala si el resultado no convence)")
         mode = gr.Radio(["overlay", "reference"], value="overlay",
                         label="Cómo se le indica la zona al modelo",
@@ -294,6 +423,17 @@ with gr.Blocks(title="AiCleanPaint") as demo:
     undo_btn.click(undo, hist, nav_outputs)
     redo_btn.click(redo, hist, nav_outputs)
     open_btn.click(open_outputs_folder, None, None)
+
+    # Selección con un clic (SAM)
+    sam_load_btn.click(sam_load, [editor, sam_state, sam_size], [sam_img, sam_state, sam_msg])
+    sam_img.select(sam_click, [sam_state, sam_kind, sam_cand], [sam_img, sam_state, sam_msg])
+    sam_cand.change(sam_refresh, [sam_state, sam_cand], [sam_img, sam_msg])
+    sam_undo_btn.click(sam_undo, [sam_state, sam_cand], [sam_img, sam_state, sam_msg])
+    sam_clear_btn.click(sam_clear, [sam_state, sam_cand], [sam_img, sam_state, sam_msg])
+    sam_use_btn.click(sam_use, [sam_state, sam_cand], [editor, sam_msg])
+    sam_enable.change(sam_toggle, sam_enable, sam_box)
+    sam_size.change(sam_size_changed, sam_size, None)
+    demo.load(sam_restore, None, [sam_enable, sam_box, sam_size])
 
 if __name__ == "__main__":
     demo.queue().launch(server_name=args.host, server_port=args.port, share=args.share,
