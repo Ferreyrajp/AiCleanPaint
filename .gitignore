@@ -19,3 +19,13 @@ Thumbs.db
 *.jpeg
 *.webp
 !assets/*
+
+# Resultados generados
+outputs/
+
+# Preferencias locales del usuario
+settings.json
+
+# Temporales de Gradio
+.gradio_tmp/
+
