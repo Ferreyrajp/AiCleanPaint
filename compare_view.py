@@ -23,6 +23,30 @@ _MOVE_JS = (
 )
 
 
+# Alterna pantalla completa sobre `.cmp-wrap`. Si el navegador no la soporta (o la rechaza), usa una
+# "pantalla completa" simulada que cubre toda la ventana (clase cmp-pfs).
+_FS_JS = (
+    "var w=this.closest('.cmp-wrap'),d=document,fe=d.fullscreenElement||d.webkitFullscreenElement;"
+    "if(w&&w.classList.contains('cmp-pfs')){w.classList.remove('cmp-pfs');}"
+    "else if(fe){var x=d.exitFullscreen||d.webkitExitFullscreen;if(x){x.call(d);}}"
+    "else if(w){var r=w.requestFullscreen||w.webkitRequestFullscreen;"
+    "if(r){var p=r.call(w);if(p&&p.catch){p.catch(function(){w.classList.add('cmp-pfs');});}}"
+    "else{w.classList.add('cmp-pfs');}}"
+)
+
+# En pantalla completa la imagen se ajusta a la pantalla manteniendo la proporción (--r = ancho/alto).
+_STYLE = """<style>
+.cmp-wrap:fullscreen{background:#000;display:flex;align-items:center;justify-content:center;width:100vw;height:100vh;}
+.cmp-wrap:fullscreen .cmp{width:min(100vw,calc(100vh*var(--r))) !important;max-width:none !important;margin:0 !important;border-radius:0 !important;}
+.cmp-wrap:-webkit-full-screen{background:#000;display:flex;align-items:center;justify-content:center;width:100vw;height:100vh;}
+.cmp-wrap:-webkit-full-screen .cmp{width:min(100vw,calc(100vh*var(--r))) !important;max-width:none !important;margin:0 !important;border-radius:0 !important;}
+.cmp-wrap.cmp-pfs{position:fixed;inset:0;z-index:99999;background:#000;display:flex;align-items:center;justify-content:center;}
+.cmp-wrap.cmp-pfs .cmp{width:min(100vw,calc(100vh*var(--r))) !important;max-width:none !important;margin:0 !important;border-radius:0 !important;}
+.cmp-fs{position:absolute;bottom:10px;right:10px;z-index:5;width:36px;height:36px;border:0;border-radius:8px;cursor:pointer;
+  background:rgba(0,0,0,.55);color:#fff;font:700 18px sans-serif;line-height:36px;padding:0;}
+.cmp-fs:hover{background:rgba(0,0,0,.8);}
+</style>"""
+
 def _data_uri(img: Image.Image, max_side: int, quality: int) -> str:
     img = img.convert("RGB")
     if max(img.size) > max_side:
@@ -33,7 +57,7 @@ def _data_uri(img: Image.Image, max_side: int, quality: int) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def build_compare_html(before: Image.Image, after: Image.Image, max_side: int = 1400,
+def build_compare_html(before: Image.Image, after: Image.Image, max_side: int = 2000,
                        max_height: int = 620, quality: int = 90) -> str:
     """Devuelve HTML con las dos imágenes superpuestas. Izquierda de la línea = antes, derecha = después."""
     after = after.convert("RGB")
@@ -46,10 +70,12 @@ def build_compare_html(before: Image.Image, after: Image.Image, max_side: int = 
     b64_after = _data_uri(after, max_side, quality)
     pill = ("position:absolute;top:10px;padding:3px 10px;border-radius:999px;font:600 12px sans-serif;"
             "color:#fff;background:rgba(0,0,0,.55);pointer-events:none;")
-    return f"""
+    return f"""{_STYLE}
+<div class="cmp-wrap" style="--r:{w / h:.5f};">
 <div class="cmp" style="position:relative;width:{width_css};aspect-ratio:{w}/{h};margin:0 auto;overflow:hidden;
      border-radius:8px;cursor:ew-resize;user-select:none;touch-action:none;"
-     onmousemove="{escape(_MOVE_JS, quote=True)}" ontouchmove="{escape(_MOVE_JS, quote=True)}">
+     onmousemove="{escape(_MOVE_JS, quote=True)}" ontouchmove="{escape(_MOVE_JS, quote=True)}"
+     ondblclick="{escape(_FS_JS, quote=True)}">
   <img src="{b64_after}" alt="Después" draggable="false"
        style="position:absolute;inset:0;width:100%;height:100%;display:block;">
   <img class="cmp-top" src="{b64_before}" alt="Antes" draggable="false"
@@ -62,5 +88,8 @@ def build_compare_html(before: Image.Image, after: Image.Image, max_side: int = 
   </div>
   <span style="{pill}left:10px;">Antes</span>
   <span style="{pill}right:10px;">Después</span>
+  <button type="button" class="cmp-fs" title="Pantalla completa (Esc para salir)" aria-label="Pantalla completa"
+          onclick="{escape(_FS_JS, quote=True)}" ondblclick="event.stopPropagation()">&#9974;</button>
+</div>
 </div>
 """

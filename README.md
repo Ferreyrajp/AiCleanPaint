@@ -8,10 +8,11 @@ Borra objetos y personas de una imagen, y rellena o corrige zonas con IA generat
 
 Funciona en **Windows y Linux** y está ajustada para una **GPU de 12 GB** (probada en RTX 3060).
 
-<!--
-Agregá capturas en la carpeta assets/ y descomentá:
-![Antes y después](assets/antes-despues.png)
--->
+<p align="center">
+  <img src="assets/antes-despues.png" alt="AiCleanPaint: se pinta el objeto y el comparador muestra el antes y el después" width="900">
+</p>
+
+<p align="center"><em>Pintás el objeto (en magenta) y el comparador muestra el antes y el después.<br>Imagen de ejemplo.</em></p>
 
 ## Características
 
@@ -21,10 +22,20 @@ Agregá capturas en la carpeta assets/ y descomentá:
 - **Edición por recorte:** solo se procesa la zona alrededor de la máscara, así se mantiene la resolución original y se ahorra memoria.
 - **Cuantización a 4 bits (NF4)** y offload a CPU para entrar en 12 GB de VRAM.
 - **Selección de objetos (opcional, apagada por defecto):** por **clics** (SAM 2.1 genera la máscara y los clics siguientes la refinan) o por **texto** en español ("personas", "perro"...), con los resultados numerados para elegir cuáles usar. Ver más abajo.
-- **Comparador antes / después:** pestaña con una línea que sigue al cursor y revela la imagen original a un lado y el resultado al otro.
+- **Comparador antes / después:** pestaña con una línea que sigue al cursor y revela la imagen original a un lado y el resultado al otro. Tiene un botón **⛶** (o doble clic sobre la imagen) para verlo en **pantalla completa**; con **Esc** se sale.
 - **Guardado automático:** cada resultado se guarda en `outputs/` como PNG sin pérdida, con fecha y hora en el nombre y los parámetros usados embebidos en el archivo.
 - **Historial con Deshacer / Rehacer:** volvé a cualquier versión anterior de una cadena de ediciones y seguí desde ahí (hasta 30 versiones por sesión).
 - Encadenado de ediciones con el botón "Usar resultado como nueva entrada".
+
+## Capturas
+
+**Borrar un objeto, con historial y guardado automático.** El resultado se guarda en `outputs/` y se puede volver atrás con Deshacer / Rehacer.
+
+![Flujo de borrado: máscara pintada, resultado y estado del historial](assets/flujo-borrar.png)
+
+**Seleccionar por texto.** Escribís qué querés seleccionar (en español), se detectan y numeran los resultados de izquierda a derecha, y elegís cuáles usar.
+
+![Selección por texto: dos personas detectadas y numeradas](assets/seleccion-por-texto.png)
 
 ## Requisitos
 
@@ -250,8 +261,9 @@ outputs/          Resultados guardados (no se sube a Git)
 
 ## Licencias
 
-- **Código de este repositorio:** definí aquí la licencia que elijas (por ejemplo MIT).
+- **Código de este repositorio:** [licencia MIT](LICENSE). Vale solo para el código de este proyecto, no para los modelos que usa.
 - **Qwen-Image-2.1:** se distribuye bajo la **Qwen Research License**. Esa licencia no es Apache/MIT y limita ciertos usos, entre ellos el comercial. Revisá el texto oficial antes de usarlo con fines comerciales. Los pesos **no están incluidos** en este repositorio; se descargan desde Hugging Face.
+- **SAM 2.1** y **Grounding DINO** (selección de objetos, opcional): licencia Apache-2.0. Los pesos tampoco se incluyen.
 
 ## Créditos
 
