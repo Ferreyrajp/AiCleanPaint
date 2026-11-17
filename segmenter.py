@@ -113,3 +113,28 @@ class Segmenter:
         scores = out.iou_scores[0, 0].cpu().numpy()
         n = arr.shape[0]
         return [arr[i].astype(bool) for i in range(n)], [float(s) for s in scores[:n]]
+
+    def predict_boxes(self, boxes: list[list[float]]) -> tuple[list[np.ndarray], list[float]]:
+        """Una máscara por caja [x0, y0, x1, y1] (píxeles de la imagen original). Requiere set_image."""
+        import torch
+
+        if self._emb is None:
+            raise RuntimeError("Primero hay que cargar una imagen (set_image).")
+        if not boxes:
+            return [], []
+        bx = [[float(v) for v in b] for b in boxes]
+        enc = self.processor(
+            original_sizes=self._sizes,
+            input_boxes=[bx],  # profundidad 3: [imagen][caja][x0, y0, x1, y1]
+            return_tensors="pt",
+        )
+        with torch.inference_mode():
+            out = self.model(
+                image_embeddings=self._emb,
+                input_boxes=enc["input_boxes"].to(self.device),
+                multimask_output=False,
+            )
+        masks = self.processor.post_process_masks(out.pred_masks.cpu(), self._sizes)[0]  # (N, 1, H, W)
+        arr = masks.numpy() if hasattr(masks, "numpy") else np.asarray(masks)
+        scores = out.iou_scores[0].cpu().numpy().reshape(arr.shape[0], -1)[:, 0]
+        return [arr[i, 0].astype(bool) for i in range(arr.shape[0])], [float(x) for x in scores]

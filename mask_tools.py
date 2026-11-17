@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 try:
     import cv2
@@ -66,3 +66,43 @@ def mask_to_layer(mask: np.ndarray) -> Image.Image:
     rgba = np.zeros((*m.shape, 4), np.uint8)
     rgba[m] = (*HILITE, 255)
     return Image.fromarray(rgba, "RGBA")
+
+
+_PALETTE = [(255, 0, 255), (0, 190, 255), (255, 170, 0), (60, 210, 90), (255, 70, 70), (140, 90, 255),
+            (0, 220, 200), (240, 220, 40), (255, 120, 190), (120, 180, 40), (90, 140, 255), (200, 120, 60)]
+
+
+def _font(size: int):
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow viejo: sin parámetro de tamaño
+        return ImageFont.load_default()
+
+
+def overlay_instances(image: Image.Image, masks: list, boxes: list, selected: list[int],
+                      alpha: float = 0.5) -> Image.Image:
+    """Vista previa de varias detecciones numeradas (1, 2, 3...). Las elegidas se tiñen; las otras, en gris."""
+    base = image.convert("RGB")
+    arr = np.asarray(base).astype(np.float32)
+    sel = set(selected)
+    for i in selected:
+        if i < len(masks):
+            col = np.array(_PALETTE[i % len(_PALETTE)], np.float32)
+            m = np.asarray(masks[i], dtype=bool)
+            arr[m] = arr[m] * (1 - alpha) + col * alpha
+    out = Image.fromarray(arr.astype(np.uint8))
+    draw = ImageDraw.Draw(out)
+    fs = max(16, int(min(out.size) * 0.035))
+    font = _font(fs)
+    lw = max(2, int(min(out.size) * 0.004))
+    for i, b in enumerate(boxes):
+        x0, y0, x1, y1 = [int(round(v)) for v in b]
+        col = _PALETTE[i % len(_PALETTE)] if i in sel else (150, 150, 150)
+        draw.rectangle((x0, y0, x1, y1), outline=col, width=lw if i in sel else 1)
+        label = str(i + 1)
+        tw = draw.textlength(label, font=font)
+        pad = max(3, fs // 5)
+        bx0, by0 = max(0, x0), max(0, y0)
+        draw.rectangle((bx0, by0, bx0 + tw + 2 * pad, by0 + fs + 2 * pad), fill=col)
+        draw.text((bx0 + pad, by0 + pad), label, fill=(255, 255, 255), font=font)
+    return out

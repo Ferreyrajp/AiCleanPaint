@@ -7,7 +7,7 @@ if [ -f ".venv/bin/activate" ]; then
     # shellcheck disable=SC1091
     source ".venv/bin/activate"
 else
-    echo "No se encontró el entorno virtual (.venv). Seguí los pasos de instalación del README."
+    echo "No se encontró el entorno virtual (.venv). Ejecutá primero ./setup.sh para instalarlo."
     exit 1
 fi
 

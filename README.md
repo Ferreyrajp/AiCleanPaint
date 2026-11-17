@@ -20,7 +20,7 @@ Agregá capturas en la carpeta assets/ y descomentá:
 - **Solo cambia lo que pintás:** el resultado se pega únicamente dentro de la máscara, con borde suavizado. El resto de la imagen queda intacto.
 - **Edición por recorte:** solo se procesa la zona alrededor de la máscara, así se mantiene la resolución original y se ahorra memoria.
 - **Cuantización a 4 bits (NF4)** y offload a CPU para entrar en 12 GB de VRAM.
-- **Selección con un clic (opcional, apagada por defecto):** hacé clic sobre un objeto y SAM 2.1 genera la máscara; los clics siguientes la refinan. Ver más abajo.
+- **Selección de objetos (opcional, apagada por defecto):** por **clics** (SAM 2.1 genera la máscara y los clics siguientes la refinan) o por **texto** en español ("personas", "perro"...), con los resultados numerados para elegir cuáles usar. Ver más abajo.
 - **Comparador antes / después:** pestaña con una línea que sigue al cursor y revela la imagen original a un lado y el resultado al otro.
 - **Guardado automático:** cada resultado se guarda en `outputs/` como PNG sin pérdida, con fecha y hora en el nombre y los parámetros usados embebidos en el archivo.
 - **Historial con Deshacer / Rehacer:** volvé a cualquier versión anterior de una cadena de ediciones y seguí desde ahí (hasta 30 versiones por sesión).
@@ -37,10 +37,50 @@ Configuración con la que se probó: Windows, Python 3.13, `torch 2.11.0+cu128`,
 
 ## Instalación
 
+### Instalación automática (recomendada)
+
 ```bash
 git clone https://github.com/Ferreyrajp/AiCleanPaint.git
 cd AiCleanPaint
+```
 
+Después ejecutá el instalador de tu sistema:
+
+| Sistema | Comando |
+|---|---|
+| Windows | `setup.bat` (o doble clic) |
+| Linux | `./setup.sh` (si dice *Permission denied*: `chmod +x setup.sh run.sh`) |
+
+El instalador:
+
+1. Busca un Python 3.10 o superior y crea el entorno virtual `.venv`.
+2. Detecta tu GPU NVIDIA con `nvidia-smi` y elige la **build de PyTorch que corresponde a tu driver** (`cu128` para drivers con CUDA 12.8 o más, `cu126` para 12.6 y 12.7).
+3. Instala `torch` y `torchvision` **juntos desde el mismo índice** (instalarlos por separado puede dejar torchvision en versión CPU) y reemplaza una build de PyTorch incorrecta si ya había una.
+4. Instala el resto de las dependencias (`requirements.txt`).
+5. Corre un diagnóstico (`check_env.py`) y te dice qué está bien y qué falta.
+
+Es seguro volver a ejecutarlo: lo que ya está bien se conserva.
+
+Opciones útiles (se pasan al final del comando, por ejemplo `setup.bat --cuda cu126`):
+
+| Opción | Qué hace |
+|---|---|
+| `--cuda cpu\|cu126\|cu128\|cu130` | Forzar la build de PyTorch en vez de la automática. |
+| `--download-model` | Descargar ya el modelo (~33 GB) en `models/`, con barra de progreso, en vez de esperar al primer uso. |
+| `--recreate` | Borrar y recrear el entorno `.venv` desde cero. |
+| `--skip-torch` / `--skip-deps` | Saltear la instalación de PyTorch o de las dependencias. |
+| `--check` | Solo diagnosticar el entorno existente. |
+| `--dry-run` | Mostrar los comandos sin ejecutar nada. |
+
+Si algo falla, ejecutá `python check_env.py` (con el entorno activado) y pegá la salida completa al pedir ayuda.
+
+> **Nota:** ya no hace falta tener `git` para instalar `diffusers`: desde la versión 0.43 el pipeline de Qwen-Image-2.1 viene en PyPI. `git` solo se usa para clonar este repositorio.
+
+### Instalación manual
+
+Si preferís hacerlo a mano:
+
+```bash
 python -m venv .venv
 # Linux:   source .venv/bin/activate
 # Windows: .venv\Scripts\activate
@@ -77,7 +117,7 @@ Opciones:
 | `--model RUTA` | Usar una copia local del modelo. |
 | `--port`, `--host` | Puerto y dirección del servidor. Sin `--port` se usa el primero libre desde 7860. |
 | `--share` | Link público temporal de Gradio. |
-| `--sam-device cpu\|cuda` | Dispositivo para SAM (selección con clic). Por defecto `cpu`. |
+| `--sam-device cpu\|cuda` | Dispositivo para SAM y el detector por texto. Por defecto `cpu`. |
 | `--no-browser` | No abrir el navegador automáticamente. |
 
 **Importante:** la primera vez que apretás el botón, se descargan los pesos (unos 33 GB) a la carpeta `models/` del proyecto y luego se cargan en memoria. Tarda bastante; las siguientes veces solo carga.
@@ -91,16 +131,32 @@ Opciones:
 3. Pintá con el pincel **toda** la zona (incluyendo sombras y bordes) y un poco por fuera.
 4. Apretá **Ejecutar**.
 
-### Seleccionar con un clic (opcional)
+### Seleccionar objetos (opcional)
 
 Está **apagada por defecto**: mientras no la actives, la app no descarga ni carga nada extra.
 
-1. En **Ajustes**, marcá *Habilitar selección con un clic (SAM 2.1)* y elegí el tamaño del modelo (`small`, unos 200 MB, es el recomendado). Aparece la sección *Selección con un clic*.
-2. Subí tu imagen al editor y apretá **1 · Cargar imagen del editor**. La primera vez descarga el modelo a `models/`.
-3. **Hacé clic sobre el objeto.** Con más clics de tipo *Incluir (+)* o *Excluir (−)* corregís la selección. Si no es la máscara que querías, probá *Máscara sugerida* 1, 2 o 3.
-4. Apretá **3 · Usar esta máscara**: pasa al editor como capa pintada. Retocala con el pincel si hace falta (SAM recorta el objeto, pero normalmente **no incluye su sombra proyectada**; pintala o subí «Agrandar máscara») y apretá **Ejecutar**.
+En **Ajustes**, marcá *Habilitar selección de objetos (SAM 2.1)* y elegí los tamaños de los modelos. Aparece la sección *Selección de objetos* con dos pestañas. Cada modelo se descarga a `models/` recién la primera vez que lo usás.
 
-Tamaños aproximados de descarga: `tiny` ~155 MB, `small` ~200 MB, `base-plus` ~336 MB, `large` ~900 MB. SAM corre en la CPU por defecto para no competir por VRAM con Qwen (`--sam-device cuda` para usar la GPU). Requiere una versión de `transformers` que incluya SAM 2 (`pip install -U transformers`).
+#### Pestaña «Por clics»
+
+1. Subí tu imagen al editor y apretá **1 · Cargar imagen del editor**.
+2. **Hacé clic sobre el objeto.** Con más clics de tipo *Incluir (+)* o *Excluir (−)* corregís la selección. Si no es la máscara que querías, probá *Máscara sugerida* 1, 2 o 3.
+3. Apretá **3 · Usar esta máscara**: pasa al editor como capa pintada. Retocala con el pincel si hace falta (SAM recorta el objeto, pero normalmente **no incluye su sombra proyectada**; pintala o subí «Agrandar máscara») y apretá **Ejecutar**.
+
+#### Pestaña «Por texto»
+
+1. Escribí qué querés seleccionar, **en español** (por defecto `personas`), o apretá **👥 Todas las personas**. Podés separar varias cosas con comas: `perro, botella`.
+2. Apretá **🔎 Buscar**. El texto se traduce al inglés (las palabras comunes con un diccionario interno, el resto con el traductor), se detectan los objetos con Grounding DINO y SAM dibuja la máscara de cada uno. Los resultados aparecen **numerados de izquierda a derecha**.
+3. Marcá o desmarcá los que querés (por ejemplo, dejá solo el nº 1 para borrar a la persona de la izquierda) y apretá **Usar la selección**: pasa al editor como capa pintada.
+
+Consejos: funciona mejor con sustantivos comunes (`persona`, `perro`, `auto`, `botella`). Frases relativas como "la de la izquierda" o "la del vestido rojo" son poco fiables: buscá `personas` y elegí por número. Si no encuentra nada, bajá la **sensibilidad**; si detecta de más, subila.
+
+#### Tamaños de descarga (aproximados)
+
+- SAM 2.1: `tiny` ~155 MB, `small` ~200 MB (recomendado), `base-plus` ~336 MB, `large` ~900 MB.
+- Detector por texto (Grounding DINO): `tiny` ~690 MB (recomendado), `base` ~930 MB. Son estimaciones a partir de la cantidad de parámetros en fp32; confirmalas en la página de cada modelo.
+
+Ambos modelos corren en la CPU por defecto para no competir por VRAM con Qwen (`--sam-device cuda` para usar la GPU). Requieren una versión de `transformers` reciente (`pip install -U transformers`). Licencias: SAM 2.1 y Grounding DINO usan Apache-2.0.
 
 ### Agregar o corregir algo
 
@@ -143,13 +199,18 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 
 | Problema | Solución |
 |---|---|
-| `Qwen3VLVideoProcessor requires the Torchvision library` | Instalá torchvision desde el mismo índice de CUDA que torch (ver Instalación). |
+| `Qwen3VLVideoProcessor requires the Torchvision library` | Ejecutá `setup.bat` / `./setup.sh` otra vez (instala torch y torchvision juntos), o instalá torchvision desde el mismo índice de CUDA que torch. |
+| El instalador dice que el driver es viejo | Actualizá el driver de NVIDIA (se necesita CUDA 12.6 o superior) y volvé a ejecutarlo. |
+| `./setup.sh: Permission denied` | `chmod +x setup.sh run.sh` |
+| Quiero comprobar si todo está bien | `python check_env.py` (con el entorno activado) o `setup.bat --check`. |
 | `CUDA out of memory` | Usá `--offload sequential`, bajá la resolución del recorte y cerrá otros programas que usen la GPU. |
 | `broken PNG file` / "La imagen del editor llegó dañada" | Quitá la imagen con la ✕ del editor y volvé a cargarla. Al iniciar, la app limpia su carpeta temporal `.gradio_tmp/`; si persiste, cerrá y reabrí la app. |
 | `Cannot find empty port` | Hay otra instancia abierta (ciérrala) o el puerto está reservado por Windows. Con la versión actual se elige un puerto libre automáticamente. |
 | El editor queda en "Cargando..." | Refrescá con Ctrl+F5 y cerrá otras pestañas con la app abierta. |
 | `SAM 2` no se encuentra / `cannot import Sam2Model` | Actualizá transformers: `pip install -U transformers`. |
 | Los clics no marcan donde hice clic | Cargá de nuevo la imagen con «1 · Cargar imagen del editor» (si cambiaste el tamaño del modelo hay que volver a cargarla). |
+| «Por texto» no encuentra lo que escribí | Bajá la sensibilidad, probá otro término (más simple, en singular) o usá el detector `base` en Ajustes. |
+| «Por texto» detecta cosas de más | Subí la sensibilidad y desmarcá los resultados que no quieras. |
 | La selección con clic es lenta | Usá `tiny`/`small`, o `--sam-device cuda` si te sobra VRAM. |
 | Queda una mancha magenta o garabatos al borrar algo muy pequeño | Las zonas diminutas usan un relleno clásico (OpenCV, instalalo con `pip install opencv-python-headless`). Ajustá el umbral en Ajustes. Si el modelo deja magenta, la app reintenta con otra semilla y, si falla, usa ese relleno. |
 | Quedan restos del objeto | Pintá más superficie (con sombras) o subí "Agrandar máscara". |
@@ -164,13 +225,18 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 app.py            Interfaz Gradio
 eraser_core.py    Carga del modelo, recorte, inferencia y pegado
 history.py        Guardado automático e historial deshacer/rehacer
-segmenter.py      Envoltorio de SAM 2.1 (selección con clic, opcional)
+segmenter.py      Envoltorio de SAM 2.1 (clics y cajas, opcional)
 click_select.py   Lógica de clics incluir/excluir y máscara final
+detector.py       Detección por texto con Grounding DINO (opcional)
+text_select.py    Selección por texto: etiquetas, numeración y elección
 mask_tools.py     Vista previa, limpieza y conversión de máscaras
 compare_view.py   Comparador antes/después
 translate.py      Traducción español → inglés de la instrucción
 requirements.txt  Dependencias (torch se instala aparte)
-run.bat / run.sh  Lanzadores para Windows y Linux
+run.bat / run.sh  Lanzadores de la app para Windows y Linux
+setup.bat / setup.sh  Instalación automática (usan install.py)
+install.py        Instalador: entorno, PyTorch según tu CUDA, dependencias
+check_env.py      Diagnóstico del entorno
 models/           Pesos descargados (no se sube a Git)
 outputs/          Resultados guardados (no se sube a Git)
 ```

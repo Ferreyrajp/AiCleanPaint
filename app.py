@@ -70,10 +70,12 @@ except Exception:  # si cambia la estructura interna de Gradio, la app sigue fun
 
 import click_select
 import history
+import text_select
 from compare_view import EMPTY_HTML, build_compare_html
 from eraser_core import MODEL_ID, Eraser, Settings
+from detector import APPROX_MB as GD_MB, DEFAULT_SIZE as GD_DEFAULT, MODELS as GD_MODELS, Detector, build_prompt
 from segmenter import APPROX_MB, DEFAULT_SIZE, MODELS, Segmenter
-from translate import prepare_instruction
+from translate import prepare_instruction, translate_es_en
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", default=MODEL_ID)
@@ -132,6 +134,8 @@ def save_seed(value) -> None:
 # nada hasta que se la habilita en Ajustes y se usa por primera vez.
 _saved_size = load_setting("sam_size", DEFAULT_SIZE)
 sam = Segmenter(size=_saved_size if _saved_size in MODELS else DEFAULT_SIZE, device=args.sam_device)
+_saved_gd = load_setting("gd_size", GD_DEFAULT)
+detector = Detector(size=_saved_gd if _saved_gd in GD_MODELS else GD_DEFAULT, device=args.sam_device)
 
 
 # En algunas versiones de Gradio el navegador envía un `composite` corrupto y el preprocesado
@@ -320,6 +324,58 @@ def sam_restore():
     return enabled, gr.update(visible=enabled), (size if size in MODELS else DEFAULT_SIZE)
 
 
+def gd_size_changed(size):
+    save_setting("gd_size", size)
+    detector.set_size(size)
+
+
+def gd_restore():
+    size = load_setting("gd_size", GD_DEFAULT)
+    return size if size in GD_MODELS else GD_DEFAULT
+
+
+def _txt_labels(query, translate_on):
+    return text_select.to_labels(query, translator=translate_es_en if translate_on else None)
+
+
+def txt_search(editor, query, thr, translate_on, progress=gr.Progress()):
+    image = _editor_background(editor)
+    labels = _txt_labels(query, translate_on)
+    if not labels:
+        gr.Warning("Escribí qué querés seleccionar (ej. personas, perro, botella).")
+        return (gr.update(), text_select.new_state(), gr.update(choices=[], value=[]),
+                "Escribí qué querés seleccionar y apretá **Buscar**.")
+    progress(0, desc="Buscando (la primera vez descarga el detector y SAM)...")
+    try:
+        state = text_select.search(image, labels, detector, sam, threshold=float(thr))
+    except Exception as e:
+        raise gr.Error(f"No se pudo buscar: {e}")
+    return (text_select.render(state), state,
+            gr.update(choices=text_select.choices(state), value=state["selected"]),
+            text_select.describe(state, build_prompt(labels)))
+
+
+def txt_people(editor, thr, translate_on, progress=gr.Progress()):
+    return ("personas",) + txt_search(editor, "personas", thr, translate_on, progress)
+
+
+def txt_refresh(state, selected):
+    if state["base"] is None or not state["dets"]:
+        return gr.update(), state, gr.update()
+    state = text_select.set_selected(state, selected)
+    return text_select.render(state), state, text_select.describe(state, build_prompt(state["labels"]))
+
+
+def txt_use(state):
+    try:
+        value = text_select.to_editor_value(state)
+    except ValueError as e:
+        gr.Warning(str(e))
+        return gr.update(), text_select.describe(state, build_prompt(state["labels"]))
+    gr.Info("Selección cargada en el editor. Revisala, retocala con el pincel si hace falta y apretá «Ejecutar».")
+    return value, "Selección enviada al editor."
+
+
 with gr.Blocks(title="AiCleanPaint") as demo:
     hist = gr.State(history.new_state())
     gr.Markdown("## AiCleanPaint\nSubí una imagen, **pintá encima del objeto** que querés borrar, seleccioná **Borrar objeto** y presioná **Ejecutar**.")
@@ -363,24 +419,44 @@ with gr.Blocks(title="AiCleanPaint") as demo:
                 open_btn = gr.Button("📂 Abrir carpeta de resultados")
             status = gr.Markdown("Sin historial todavía.")
 
-    with gr.Accordion("🖱️ Selección con un clic (SAM)", open=True,
+    with gr.Accordion("🖱️ Selección de objetos (SAM)", open=True,
                       visible=bool(load_setting("sam_enabled", False))) as sam_box:
-        sam_state = gr.State(click_select.new_state())
-        gr.Markdown("**1)** Cargá la imagen del editor. **2)** Hacé clic sobre el objeto; más clics refinan la "
-                    "selección. **3)** «Usar esta máscara» la pasa al editor, donde podés retocarla con el pincel "
-                    "y apretar «Ejecutar».")
-        with gr.Row():
-            sam_load_btn = gr.Button("1 · Cargar imagen del editor")
-            sam_kind = gr.Radio(["Incluir (+)", "Excluir (−)"], value="Incluir (+)", label="Tipo de clic",
-                                info="Excluir quita de la selección lo que tocaste.")
-            sam_cand = gr.Radio(click_select.CAND_CHOICES, value="Auto", label="Máscara sugerida",
-                                info="Si no es la que querías, probá 1, 2 o 3.")
-        sam_img = gr.Image(label="Hacé clic sobre el objeto", type="pil", height=520)
-        with gr.Row():
-            sam_undo_btn = gr.Button("Quitar último clic")
-            sam_clear_btn = gr.Button("Limpiar clics")
-            sam_use_btn = gr.Button("3 · Usar esta máscara", variant="primary")
-        sam_msg = gr.Markdown(click_select.describe(click_select.new_state()))
+        with gr.Tabs():
+            with gr.Tab("Por clics"):
+                sam_state = gr.State(click_select.new_state())
+                gr.Markdown("**1)** Cargá la imagen del editor. **2)** Hacé clic sobre el objeto; más clics refinan "
+                            "la selección. **3)** «Usar esta máscara» la pasa al editor, donde podés retocarla con "
+                            "el pincel y apretar «Ejecutar».")
+                with gr.Row():
+                    sam_load_btn = gr.Button("1 · Cargar imagen del editor")
+                    sam_kind = gr.Radio(["Incluir (+)", "Excluir (−)"], value="Incluir (+)", label="Tipo de clic",
+                                        info="Excluir quita de la selección lo que tocaste.")
+                    sam_cand = gr.Radio(click_select.CAND_CHOICES, value="Auto", label="Máscara sugerida",
+                                        info="Si no es la que querías, probá 1, 2 o 3.")
+                sam_img = gr.Image(label="Hacé clic sobre el objeto", type="pil", height=520)
+                with gr.Row():
+                    sam_undo_btn = gr.Button("Quitar último clic")
+                    sam_clear_btn = gr.Button("Limpiar clics")
+                    sam_use_btn = gr.Button("3 · Usar esta máscara", variant="primary")
+                sam_msg = gr.Markdown(click_select.describe(click_select.new_state()))
+
+            with gr.Tab("Por texto"):
+                txt_state = gr.State(text_select.new_state())
+                gr.Markdown("Escribí **qué querés seleccionar** (en español). Se detecta, se numera de izquierda a "
+                            "derecha y elegís cuáles usar. *La primera búsqueda descarga el detector "
+                            f"(~{GD_MB[GD_DEFAULT]} MB) y SAM.*")
+                with gr.Row():
+                    txt_query = gr.Textbox(value="personas", label="¿Qué querés seleccionar?", scale=3,
+                                           placeholder="ej. personas, perro, botella (podés separar con comas)")
+                    txt_thr = gr.Slider(0.10, 0.60, value=0.30, step=0.05, label="Sensibilidad",
+                                        info="Menor = detecta más cosas (y se equivoca más).")
+                with gr.Row():
+                    txt_people_btn = gr.Button("👥 Todas las personas")
+                    txt_search_btn = gr.Button("🔎 Buscar", variant="primary")
+                txt_img = gr.Image(label="Resultados numerados", type="pil", height=520, interactive=False)
+                txt_sel = gr.CheckboxGroup(choices=[], value=[], label="Elegí cuáles seleccionar")
+                txt_use_btn = gr.Button("Usar la selección", variant="primary")
+                txt_msg = gr.Markdown(text_select.describe(text_select.new_state()))
 
     with gr.Accordion("Ajustes", open=False):
         steps = gr.Slider(10, 50, value=30, step=1, label="Pasos (más = mejor y más lento)")
@@ -400,14 +476,19 @@ with gr.Blocks(title="AiCleanPaint") as demo:
             info="PNG sin pérdida con fecha y hora. Si lo desactivás, el historial sigue funcionando pero no se guarda nada permanente.")
         sam_enable = gr.Checkbox(
             value=bool(load_setting("sam_enabled", False)),
-            label="Habilitar selección con un clic (SAM 2.1)",
-            info="Apagado por defecto. Al usarlo por primera vez descarga el modelo elegido (ver tamaño abajo).")
+            label="Habilitar selección de objetos (SAM 2.1): por clics y por texto",
+            info="Apagado por defecto. Cada modelo se descarga recién la primera vez que lo usás (ver tamaños abajo).")
         _size0 = load_setting("sam_size", DEFAULT_SIZE)
         sam_size = gr.Dropdown(
             choices=[(f"{k} · ~{APPROX_MB[k]} MB" + (" (recomendado)" if k == DEFAULT_SIZE else ""), k)
                      for k in MODELS],
             value=_size0 if _size0 in MODELS else DEFAULT_SIZE, label="Tamaño del modelo SAM",
             info="Más grande = bordes más finos pero más lento. Cambiarlo requiere volver a cargar la imagen.")
+        _gd0 = load_setting("gd_size", GD_DEFAULT)
+        gd_size = gr.Dropdown(
+            choices=[(f"{k} · ~{GD_MB[k]} MB" + (" (recomendado)" if k == GD_DEFAULT else ""), k) for k in GD_MODELS],
+            value=_gd0 if _gd0 in GD_MODELS else GD_DEFAULT, label="Tamaño del detector por texto (Grounding DINO)",
+            info="Se usa en la pestaña «Por texto». Base detecta mejor objetos chicos pero pesa y tarda más.")
         seed = gr.Number(value=load_seed(), precision=0, label="Semilla (cambiala si el resultado no convence)")
         mode = gr.Radio(["overlay", "reference"], value="overlay",
                         label="Cómo se le indica la zona al modelo",
@@ -434,6 +515,16 @@ with gr.Blocks(title="AiCleanPaint") as demo:
     sam_enable.change(sam_toggle, sam_enable, sam_box)
     sam_size.change(sam_size_changed, sam_size, None)
     demo.load(sam_restore, None, [sam_enable, sam_box, sam_size])
+
+    # Selección por texto
+    _txt_outputs = [txt_img, txt_state, txt_sel, txt_msg]
+    txt_search_btn.click(txt_search, [editor, txt_query, txt_thr, translate], _txt_outputs)
+    txt_query.submit(txt_search, [editor, txt_query, txt_thr, translate], _txt_outputs)
+    txt_people_btn.click(txt_people, [editor, txt_thr, translate], [txt_query] + _txt_outputs)
+    txt_sel.input(txt_refresh, [txt_state, txt_sel], [txt_img, txt_state, txt_msg])
+    txt_use_btn.click(txt_use, txt_state, [editor, txt_msg])
+    gd_size.change(gd_size_changed, gd_size, None)
+    demo.load(gd_restore, None, gd_size)
 
 if __name__ == "__main__":
     demo.queue().launch(server_name=args.host, server_port=args.port, share=args.share,

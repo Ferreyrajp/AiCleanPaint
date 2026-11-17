@@ -8,5 +8,5 @@ opencv-python-headless
 sentencepiece
 sacremoses
 numpy
-# Diffusers desde git (QwenImage21Pipeline es muy reciente):
-git+https://github.com/huggingface/diffusers
+# QwenImage21Pipeline viene incluido desde diffusers 0.43 (ya no hace falta instalar desde git)
+diffusers>=0.43.0
