@@ -57,6 +57,7 @@ class Settings:
     extra_prompt: str = ""
     action: str = "erase"      # "erase" (borrar objeto) | "fill" (rellenar/agregar según instrucción)
     small_px: int = 64         # zonas más chicas que esto (lado mayor, en px) usan relleno clásico; 0 = nunca
+    engine: str = "qwen"       # "qwen" (calidad, por defecto) | "lama" (modo rápido, solo para borrar)
 
 
 def _round32(v: int) -> int:
@@ -106,6 +107,7 @@ class Eraser:
         self.quant = quant          # "nf4" | "int8" | "none"
         self.offload = offload      # "model" | "sequential" | "none"
         self.pipe = None
+        self.lama = None            # LamaInpainter opcional (modo rápido); lo asigna la app
 
     # ------------------------------------------------------------------ carga
     def load(self):
@@ -194,6 +196,17 @@ class Eraser:
         return max(0, x0), max(0, y0), min(W, x1), min(H, y1)
 
     # --------------------------------------------------------------- inferencia
+    def _lama_patch(self, crop: Image.Image, mcrop: Image.Image, max_side: int) -> Image.Image:
+        """Parche de LaMa para el recorte. Si el recorte es grande se reduce (nunca se agranda) y se vuelve a escalar."""
+        cw, ch = crop.size
+        k = min(1.0, max_side / max(cw, ch))
+        if k < 1.0:
+            tw, th = max(8, round(cw * k)), max(8, round(ch * k))
+            patch = self.lama.inpaint(crop.resize((tw, th), Image.LANCZOS), mcrop.resize((tw, th), Image.NEAREST))
+        else:
+            patch = self.lama.inpaint(crop, mcrop)
+        return patch if patch.size == (cw, ch) else patch.resize((cw, ch), Image.LANCZOS)
+
     @torch.inference_mode()
     def erase(self, image: Image.Image, mask: Image.Image, s: Settings, progress=None) -> Image.Image:
         image = image.convert("RGB")
@@ -212,6 +225,12 @@ class Eraser:
         crop = image.crop(box)
         mcrop = mask_big.crop(box)
         cw, ch = crop.size
+
+        # Modo rápido (LaMa): no usa Qwen, ni instrucciones, ni semilla. "Rellenar con instrucción" siempre usa Qwen.
+        if s.engine == "lama" and not fill:
+            if self.lama is None:
+                raise RuntimeError("El modo rápido (LaMa) no está disponible en esta ejecución.")
+            return _paste_patch(image, self._lama_patch(crop, mcrop, s.max_side), mcrop, box, s.feather_px)
 
         # Manchas pequeñas: el modelo suele fallar (deja el resaltado o dibuja garabatos).
         # Se usa un relleno clásico, instantáneo y sin cargar el modelo.

@@ -73,6 +73,7 @@ import history
 import text_select
 from compare_view import EMPTY_HTML, build_compare_html
 from eraser_core import MODEL_ID, Eraser, Settings
+from lama_inpaint import APPROX_MB as LAMA_MB, LamaInpainter
 from detector import APPROX_MB as GD_MB, DEFAULT_SIZE as GD_DEFAULT, MODELS as GD_MODELS, Detector, build_prompt
 from segmenter import APPROX_MB, DEFAULT_SIZE, MODELS, Segmenter
 from translate import prepare_instruction, translate_es_en
@@ -88,10 +89,15 @@ parser.add_argument("--host", default="127.0.0.1")
 parser.add_argument("--share", action="store_true")
 parser.add_argument("--sam-device", choices=["cpu", "cuda"], default="cpu",
                     help="dispositivo para SAM (selección con clic). cpu evita competir por VRAM con Qwen")
+parser.add_argument("--lama-device", choices=["auto", "cpu", "cuda"], default="auto",
+                    help="dispositivo para el modo rápido (LaMa). auto = GPU si hay; si falta memoria, cae a CPU")
 parser.add_argument("--no-browser", action="store_true", help="no abrir el navegador automáticamente")
 args = parser.parse_args()
 
 eraser = Eraser(args.model, quant=args.quant, offload=args.offload)
+# Modo rápido (LaMa): opcional y apagado por defecto. No descarga ni carga nada hasta que se lo usa.
+lama = LamaInpainter(device=args.lama_device)
+eraser.lama = lama
 
 # --- Ajustes recordados entre sesiones (semilla, selección con clic) -------------------
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
@@ -169,22 +175,44 @@ gr.ImageEditor.preprocess = _safe_preprocess
 
 
 def run(editor, action, extra, steps, max_side, context, grow_px, feather_px, seed, mode, small_px,
-        translate, autosave, hist, progress=gr.Progress()):
+        translate, autosave, hist, engine="Calidad (Qwen)", progress=gr.Progress()):
     image, mask = Eraser.mask_from_editor(editor)
-    if eraser.pipe is None:
-        progress(0, desc="Cargando modelo (la primera vez descarga varios GB)...")
-        eraser.load()
-    instruction, translated, err = prepare_instruction(extra, enabled=translate)
-    if err:
-        gr.Warning("No se pudo traducir la instrucción; se envía tal cual. Detalle: " + err[:200])
+    fill = action.startswith("Rellenar")
+    wants_fast = str(engine).startswith("Rápido")
+    if wants_fast and fill:
+        gr.Info("«Rellenar con instrucción» siempre usa Qwen: el modo rápido no entiende instrucciones.")
+    use_lama = wants_fast and not fill
+
+    if use_lama:
+        # Modo rápido: no se carga Qwen, no hay traducción ni semilla.
+        instruction = ""
+        shown = "Modo rápido (LaMa): no usa instrucción."
+        if (extra or "").strip():
+            gr.Info("El modo rápido (LaMa) no usa la instrucción; se ignora.")
+        if not lama.loaded:
+            progress(0, desc="Cargando LaMa (la primera vez descarga ~%d MB)..." % LAMA_MB)
+    else:
+        if eraser.pipe is None:
+            progress(0, desc="Cargando modelo (la primera vez descarga varios GB)...")
+            eraser.load()
+        instruction, translated, err = prepare_instruction(extra, enabled=translate)
+        if err:
+            gr.Warning("No se pudo traducir la instrucción; se envía tal cual. Detalle: " + err[:200])
+        shown = instruction
     s = Settings(
         steps=int(steps), max_side=int(max_side), context=float(context),
         grow_px=int(grow_px), feather_px=int(feather_px), seed=int(seed),
         mode=mode, extra_prompt=instruction,
-        action="fill" if action.startswith("Rellenar") else "erase",
+        action="fill" if fill else "erase",
         small_px=int(small_px),
+        engine="lama" if use_lama else "qwen",
     )
-    result = eraser.erase(image, mask, s, progress=progress)
+    try:
+        result = eraser.erase(image, mask, s, progress=progress)
+    except Exception as e:
+        if use_lama:  # descarga, hash, carga o inferencia de LaMa: mensaje claro en la interfaz
+            raise gr.Error(f"Modo rápido (LaMa): {e}") from e
+        raise
     try:
         compare = build_compare_html(image, result)
     except Exception:  # el comparador es accesorio: nunca debe romper la edición
@@ -198,7 +226,7 @@ def run(editor, action, extra, steps, max_side, context, grow_px, feather_px, se
         info = history.status(hist, saved if autosave else None)
     except Exception as e:
         info = f"No se pudo guardar el historial ({type(e).__name__}: {e})"
-    return result, compare, instruction, hist, info
+    return result, compare, shown, hist, info
 
 
 def reuse(result):
@@ -324,6 +352,16 @@ def sam_restore():
     return enabled, gr.update(visible=enabled), (size if size in MODELS else DEFAULT_SIZE)
 
 
+def lama_toggle(enabled):
+    save_setting("lama_enabled", bool(enabled))
+    return gr.update(visible=bool(enabled), value="Calidad (Qwen)")  # al apagarlo siempre se vuelve a Qwen
+
+
+def lama_restore():
+    enabled = bool(load_setting("lama_enabled", False))
+    return enabled, gr.update(visible=enabled)
+
+
 def gd_size_changed(size):
     save_setting("gd_size", size)
     detector.set_size(size)
@@ -395,6 +433,12 @@ with gr.Blocks(title="AiCleanPaint") as demo:
                 ["Borrar objeto", "Rellenar con instrucción"], value="Borrar objeto",
                 label="Acción",
                 info="Rellenar sirve para agregar o corregir algo (ej. una pierna que falta).",
+            )
+            engine = gr.Radio(
+                ["Calidad (Qwen)", "Rápido (LaMa)"], value="Calidad (Qwen)", label="Motor",
+                info="Rápido (LaMa) sirve para borrar cosas chicas o fondos simples en pocos segundos; "
+                     "para escenas complejas o «Rellenar» usá Calidad.",
+                visible=bool(load_setting("lama_enabled", False)),
             )
             extra = gr.Textbox(
                 label="Instrucción (podés escribir en español). Obligatoria en 'Rellenar'; opcional al borrar",
@@ -474,6 +518,10 @@ with gr.Blocks(title="AiCleanPaint") as demo:
         autosave = gr.Checkbox(
             value=True, label="Guardar cada resultado en la carpeta outputs/",
             info="PNG sin pérdida con fecha y hora. Si lo desactivás, el historial sigue funcionando pero no se guarda nada permanente.")
+        lama_enable = gr.Checkbox(
+            value=bool(load_setting("lama_enabled", False)),
+            label="Habilitar modo rápido (LaMa) para borrar",
+            info=f"Apagado por defecto. Agrega el selector «Motor». La primera vez que lo uses descarga ~{LAMA_MB} MB.")
         sam_enable = gr.Checkbox(
             value=bool(load_setting("sam_enabled", False)),
             label="Habilitar selección de objetos (SAM 2.1): por clics y por texto",
@@ -495,7 +543,7 @@ with gr.Blocks(title="AiCleanPaint") as demo:
                         info="overlay: zona resaltada en magenta sobre la imagen. reference: máscara como segunda imagen.")
 
     inputs = [editor, action, extra, steps, max_side, context, grow_px, feather_px, seed, mode, small_px,
-              translate, autosave, hist]
+              translate, autosave, hist, engine]
     btn.click(run, inputs, [out, compare, sent, hist, status])
     seed.change(save_seed, seed, None, show_progress="hidden")
     demo.load(load_seed, None, seed)  # al abrir/refrescar la página, usa la última semilla guardada
@@ -525,6 +573,10 @@ with gr.Blocks(title="AiCleanPaint") as demo:
     txt_use_btn.click(txt_use, txt_state, [editor, txt_msg])
     gd_size.change(gd_size_changed, gd_size, None)
     demo.load(gd_restore, None, gd_size)
+
+    # Modo rápido (LaMa)
+    lama_enable.change(lama_toggle, lama_enable, engine)
+    demo.load(lama_restore, None, [lama_enable, engine])
 
 if __name__ == "__main__":
     demo.queue().launch(server_name=args.host, server_port=args.port, share=args.share,

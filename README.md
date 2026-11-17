@@ -21,6 +21,7 @@ Funciona en **Windows y Linux** y está ajustada para una **GPU de 12 GB** (prob
 - **Solo cambia lo que pintás:** el resultado se pega únicamente dentro de la máscara, con borde suavizado. El resto de la imagen queda intacto.
 - **Edición por recorte:** solo se procesa la zona alrededor de la máscara, así se mantiene la resolución original y se ahorra memoria.
 - **Cuantización a 4 bits (NF4)** y offload a CPU para entrar en 12 GB de VRAM.
+- **Modo rápido (LaMa, opcional, apagado por defecto):** para borrar cosas chicas o fondos simples en pocos segundos, sin cargar Qwen. Ver más abajo.
 - **Selección de objetos (opcional, apagada por defecto):** por **clics** (SAM 2.1 genera la máscara y los clics siguientes la refinan) o por **texto** en español ("personas", "perro"...), con los resultados numerados para elegir cuáles usar. Ver más abajo.
 - **Comparador antes / después:** pestaña con una línea que sigue al cursor y revela la imagen original a un lado y el resultado al otro. Tiene un botón **⛶** (o doble clic sobre la imagen) para verlo en **pantalla completa**; con **Esc** se sale.
 - **Guardado automático:** cada resultado se guarda en `outputs/` como PNG sin pérdida, con fecha y hora en el nombre y los parámetros usados embebidos en el archivo.
@@ -128,6 +129,7 @@ Opciones:
 | `--model RUTA` | Usar una copia local del modelo. |
 | `--port`, `--host` | Puerto y dirección del servidor. Sin `--port` se usa el primero libre desde 7860. |
 | `--share` | Link público temporal de Gradio. |
+| `--lama-device auto\|cpu\|cuda` | Dispositivo del modo rápido (LaMa). Por defecto `auto`: GPU si hay, y si falta memoria pasa a CPU. |
 | `--sam-device cpu\|cuda` | Dispositivo para SAM y el detector por texto. Por defecto `cpu`. |
 | `--no-browser` | No abrir el navegador automáticamente. |
 
@@ -141,6 +143,26 @@ Opciones:
 2. Elegí la acción **Borrar objeto**.
 3. Pintá con el pincel **toda** la zona (incluyendo sombras y bordes) y un poco por fuera.
 4. Apretá **Ejecutar**.
+
+### Modo rápido con LaMa (opcional)
+
+Está **apagado por defecto**: mientras no lo actives, la pantalla y el comportamiento son los de siempre.
+
+1. En **Ajustes**, marcá *Habilitar modo rápido (LaMa) para borrar*. Aparece el selector **Motor** junto a *Acción*.
+2. Elegí **Rápido (LaMa)** y usá la app igual que siempre: pintás (o seleccionás con SAM) y apretás **Ejecutar**. El resultado pasa por el mismo historial, comparador y guardado en `outputs/` (el archivo termina en `_borrar-lama.png`).
+3. La primera vez descarga el modelo (~200 MB, licencia Apache-2.0) a `models/`. **No se carga Qwen**, así que no esperás su carga ni usás su VRAM.
+
+Cuándo conviene cada motor:
+
+| | Rápido (LaMa) | Calidad (Qwen) |
+|---|---|---|
+| Sirve para | Detalles chicos o medianos sobre fondos regulares: cables, textos, manchas, objetos pequeños | Objetos grandes, personas, escenas complejas |
+| Entiende instrucciones | No | Sí |
+| Inventa estructura nueva | No: con zonas grandes deja texturas borrosas o repetidas | Sí |
+
+«Rellenar con instrucción» **siempre usa Qwen**, aunque elijas Rápido. Si el resultado rápido no te convence, cambiá a Calidad y volvé a ejecutar (con Deshacer volvés atrás).
+
+Seguridad: el modelo es un archivo TorchScript (formato basado en pickle). Por eso la app descarga una versión fija del repositorio y **verifica su hash SHA-256 antes de cargarlo**; si no coincide, no lo abre. En una GPU con poca memoria libre, LaMa cae solo a la CPU (`--lama-device cpu|cuda|auto` para elegir).
 
 ### Seleccionar objetos (opcional)
 
@@ -222,6 +244,8 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 | Los clics no marcan donde hice clic | Cargá de nuevo la imagen con «1 · Cargar imagen del editor» (si cambiaste el tamaño del modelo hay que volver a cargarla). |
 | «Por texto» no encuentra lo que escribí | Bajá la sensibilidad, probá otro término (más simple, en singular) o usá el detector `base` en Ajustes. |
 | «Por texto» detecta cosas de más | Subí la sensibilidad y desmarcá los resultados que no quieras. |
+| El modo rápido deja una zona borrosa o con texturas repetidas | Es el límite de LaMa con zonas grandes o complejas: usá el motor «Calidad (Qwen)». |
+| «Modo rápido (LaMa): … no coincide con el hash esperado» | La descarga quedó dañada. Borrá la carpeta `models/hub/models--JosephCatrambone--big-lama-torchscript` y volvé a probar. |
 | La selección con clic es lenta | Usá `tiny`/`small`, o `--sam-device cuda` si te sobra VRAM. |
 | Queda una mancha magenta o garabatos al borrar algo muy pequeño | Las zonas diminutas usan un relleno clásico (OpenCV, instalalo con `pip install opencv-python-headless`). Ajustá el umbral en Ajustes. Si el modelo deja magenta, la app reintenta con otra semilla y, si falla, usa ese relleno. |
 | Quedan restos del objeto | Pintá más superficie (con sombras) o subí "Agrandar máscara". |
@@ -236,6 +260,7 @@ El resaltado es magenta (y no rojo) porque casi no aparece en fotos reales y no 
 app.py            Interfaz Gradio
 eraser_core.py    Carga del modelo, recorte, inferencia y pegado
 history.py        Guardado automático e historial deshacer/rehacer
+lama_inpaint.py   Modo rápido: LaMa (descarga verificada por hash, opcional)
 segmenter.py      Envoltorio de SAM 2.1 (clics y cajas, opcional)
 click_select.py   Lógica de clics incluir/excluir y máscara final
 detector.py       Detección por texto con Grounding DINO (opcional)
@@ -263,7 +288,7 @@ outputs/          Resultados guardados (no se sube a Git)
 
 - **Código de este repositorio:** [licencia MIT](LICENSE). Vale solo para el código de este proyecto, no para los modelos que usa.
 - **Qwen-Image-2.1:** se distribuye bajo la **Qwen Research License**. Esa licencia no es Apache/MIT y limita ciertos usos, entre ellos el comercial. Revisá el texto oficial antes de usarlo con fines comerciales. Los pesos **no están incluidos** en este repositorio; se descargan desde Hugging Face.
-- **SAM 2.1** y **Grounding DINO** (selección de objetos, opcional): licencia Apache-2.0. Los pesos tampoco se incluyen.
+- **SAM 2.1**, **Grounding DINO** (selección de objetos) y **LaMa** (modo rápido), todos opcionales: licencia Apache-2.0. Los pesos tampoco se incluyen.
 
 ## Créditos
 

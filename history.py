@@ -42,6 +42,8 @@ def save_result(img: Image.Image, meta: dict) -> Path:
     """Guarda en outputs/ un PNG sin pérdida con los parámetros embebidos."""
     OUTPUTS.mkdir(exist_ok=True)
     kind = "rellenar" if meta.get("action") == "fill" else "borrar"
+    if meta.get("engine") == "lama" and kind == "borrar":
+        kind += "-lama"
     path = _unique_path(OUTPUTS, f"{time.strftime('%Y-%m-%d_%H-%M-%S')}_{kind}")
     info = PngImagePlugin.PngInfo()
     info.add_text("parameters", json.dumps(meta, ensure_ascii=False))
