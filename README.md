@@ -290,6 +290,12 @@ outputs/          Resultados guardados (no se sube a Git)
 - **Qwen-Image-2.1:** se distribuye bajo la **Qwen Research License**. Esa licencia no es Apache/MIT y limita ciertos usos, entre ellos el comercial. Revisá el texto oficial antes de usarlo con fines comerciales. Los pesos **no están incluidos** en este repositorio; se descargan desde Hugging Face.
 - **SAM 2.1**, **Grounding DINO** (selección de objetos) y **LaMa** (modo rápido), todos opcionales: licencia Apache-2.0. Los pesos tampoco se incluyen.
 
+### Atribución y aviso legal
+
+> **Built with Qwen.** Qwen is licensed under the Qwen RESEARCH LICENSE AGREEMENT, Copyright (c) 2026 Hangzhou Tongyi Laboratory Technology Co., Ltd. All Rights Reserved.
+>
+> AiCleanPaint es un proyecto independiente y no oficial: no está afiliado ni respaldado por Alibaba ni por el equipo de Qwen. "Qwen" y "Qwen-Image-2.1" se mencionan solo para indicar el modelo en el que se basa. Este repositorio no incluye ni modifica los pesos del modelo.
+
 ## Créditos
 
 - [Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1), de Alibaba / Qwen.
