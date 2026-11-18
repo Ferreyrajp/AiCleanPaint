@@ -21,6 +21,7 @@ if "GRADIO_TEMP_DIR" not in os.environ:
 import argparse
 import dataclasses
 import functools
+import inspect
 import json
 import subprocess
 import sys
@@ -229,10 +230,29 @@ def run(editor, action, extra, steps, max_side, context, grow_px, feather_px, se
     return result, compare, shown, hist, info
 
 
-def reuse(result):
-    if result is None:
+def reuse(hist):
+    """Carga en el editor la versión actual del historial (la misma que se ve en «Resultado»)."""
+    _, img = history.step(hist, 0)
+    if img is None:
+        gr.Info("Todavía no hay un resultado para usar.")
         return gr.update()
-    return {"background": result, "layers": [], "composite": None}
+    return {"background": img, "layers": [], "composite": None}
+
+
+def _result_image_kwargs() -> dict:
+    """Botones de la esquina del resultado: descargar y pantalla completa (sin «compartir»).
+    Gradio 6 usa `buttons`; Gradio 5 usa `show_*_button`."""
+    params = inspect.signature(gr.Image.__init__).parameters
+    if "buttons" in params:
+        return {"buttons": ["download", "fullscreen"]}
+    kw = {}
+    if "show_download_button" in params:
+        kw["show_download_button"] = True
+    if "show_share_button" in params:
+        kw["show_share_button"] = False
+    if "show_fullscreen_button" in params:
+        kw["show_fullscreen_button"] = True
+    return kw
 
 
 def _navigate(hist, delta):
@@ -453,7 +473,8 @@ with gr.Blocks(title="AiCleanPaint") as demo:
         with gr.Column():
             with gr.Tabs():
                 with gr.Tab("Resultado"):
-                    out = gr.Image(label="Resultado", type="pil", height=600, format="png")
+                    out = gr.Image(label="Resultado", type="pil", height=600, format="png", interactive=False,
+                                   **_result_image_kwargs())
                 with gr.Tab("Antes / después"):
                     compare = gr.HTML(EMPTY_HTML)
             again = gr.Button("Usar resultado como nueva entrada")
@@ -547,7 +568,7 @@ with gr.Blocks(title="AiCleanPaint") as demo:
     btn.click(run, inputs, [out, compare, sent, hist, status])
     seed.change(save_seed, seed, None, show_progress="hidden")
     demo.load(load_seed, None, seed)  # al abrir/refrescar la página, usa la última semilla guardada
-    again.click(reuse, out, editor)
+    again.click(reuse, hist, editor)
     nav_outputs = [editor, out, compare, hist, status]
     undo_btn.click(undo, hist, nav_outputs)
     redo_btn.click(redo, hist, nav_outputs)
